@@ -16,8 +16,10 @@ use crate::materials::Gather;
 
 /// Сколько фигур кучи могут отдать за кадр (под них запасён буфер на GPU).
 pub const HEAP_MAX: usize = 512;
-/// Сколько шаров и куч может быть сразу.
-const MAX_HEAPS: usize = 24;
+/// Сколько шаров и куч может быть сразу. Лишние старые рассыпаются.
+pub const MAX_HEAPS: usize = 12;
+/// Сколько из них может быть снеговиками (два шара и больше).
+pub const MAX_SNOWMEN: usize = 5;
 /// Наибольший радиус шара, точки.
 const R_MAX: f32 = 13.0;
 /// Наименьший радиус, при котором курсор вообще что-то сгребает.
@@ -37,6 +39,9 @@ pub struct Heap {
     /// Где была поверхность, когда куча на ней появилась: сдвинули окно — куча падает.
     pub anchor: (f32, f32),
     pub seed: u32,
+    /// Сколько секунд прошло с появления или с последней перестройки (слияния, нового яруса):
+    /// самые «старые» рассыпаются первыми, когда шаров слишком много.
+    pub age: f32,
 }
 
 fn radius(mass: f32) -> f32 {
@@ -111,6 +116,9 @@ impl Sim {
     /// Шаг шаров и куч: рождение под курсором, толкание, подбор, столкновения.
     pub(super) fn heaps_step(&mut self, dt: f32, c: (f32, f32), cv: (f32, f32)) {
         let kind = self.kind;
+        for h in &mut self.heaps {
+            h.age += dt;
+        }
         // 1. упавшие: поверхность исчезла, сдвинулась или кончилась под шаром
         let mut i = 0;
         while i < self.heaps.len() {
@@ -131,7 +139,7 @@ impl Sim {
         }
 
         // 2. рождение: быстрый проход курсора у кромки сгребает кучу в шар
-        if cv.0.abs() > 60.0 && self.heaps.len() < MAX_HEAPS {
+        if cv.0.abs() > 60.0 {
             let mut born = Vec::new();
             for (&id, s) in self.surfaces.iter_mut() {
                 if !(c.1 < s.y + 8.0 && c.1 > s.y - 60.0) {
@@ -161,10 +169,8 @@ impl Sim {
                     kind,
                     anchor: (s.x0, s.y),
                     seed: (c.0 as i32 as u32).wrapping_mul(2_654_435_761) ^ (id as u32),
+                    age: 0.0,
                 });
-                if self.heaps.len() + born.len() >= MAX_HEAPS {
-                    break;
-                }
             }
             self.heaps.extend(born);
         }
@@ -190,8 +196,11 @@ impl Sim {
                 let dir = h.vx.signum();
                 let col = |x: f32| ((x - s.x0) / COL_W).floor() as isize;
                 let (c0, c1) = (col(h.x + dir * hw), col(nx + dir * hw));
-                for k in c0.min(c1)..=c0.max(c1) {
-                    if k < 0 || k as usize >= s.h.len() || !s.vis[k as usize] {
+                // диапазон держим внутри поверхности: иначе из-за одной ошибки в x он мог бы
+                // оказаться огромным, и цикл не закончился бы
+                let last = s.h.len() as isize - 1;
+                for k in c0.min(c1).max(0)..=c0.max(c1).min(last) {
+                    if k < 0 || k > last || !s.vis[k as usize] {
                         continue;
                     }
                     let k = k as usize;
@@ -205,7 +214,9 @@ impl Sim {
             h.x = nx;
         }
 
-        // 4. столкновения: шары ставятся друг на друга, холмики сливаются
+        // 4. столкновения: шары ставятся друг на друга, холмики сливаются. Цикл
+        // перезапускается только когда число куч уменьшилось, поэтому он кончается:
+        // упёршиеся шары лишь останавливаются, а раздвигает их `separate` ниже
         'again: loop {
             let n = self.heaps.len();
             for a in 0..n {
@@ -218,16 +229,64 @@ impl Sim {
                         continue;
                     }
                     let (m, t) = if self.heaps[a].vx.abs() >= self.heaps[b].vx.abs() { (a, b) } else { (b, a) };
-                    self.collide(m, t, need);
-                    continue 'again;
+                    if self.collide(m, t) {
+                        continue 'again;
+                    }
                 }
             }
             break;
         }
+        self.separate();
+        self.enforce_limits();
     }
 
-    /// Мовер `m` врезался в цель `t`: поставить сверху, слить или остановиться.
-    fn collide(&mut self, m: usize, t: usize, need: f32) {
+    /// Рассыпает самых старых, если снеговиков или шаров вообще стало больше предела.
+    /// Рассыпанное превращается в частицы, так что масса не пропадает.
+    fn enforce_limits(&mut self) {
+        let oldest = |heaps: &[Heap], only_snowmen: bool| {
+            heaps
+                .iter()
+                .enumerate()
+                .filter(|(_, h)| !only_snowmen || h.tiers.len() >= 2)
+                .max_by(|a, b| a.1.age.total_cmp(&b.1.age))
+                .map(|(i, _)| i)
+        };
+        while self.heaps.iter().filter(|h| h.tiers.len() >= 2).count() > MAX_SNOWMEN {
+            let Some(i) = oldest(&self.heaps, true) else { break };
+            let h = self.heaps.swap_remove(i);
+            self.drop_heap(h, true);
+        }
+        while self.heaps.len() > MAX_HEAPS {
+            let Some(i) = oldest(&self.heaps, false) else { break };
+            let h = self.heaps.swap_remove(i);
+            self.drop_heap(h, true);
+        }
+    }
+
+    /// Раздвигает наложившиеся шары, не меняя их числа: слева направо, каждый
+    /// следующий отодвигается от предыдущего. Так ряд тесно стоящих шаров
+    /// сдвигается целиком, а выдавленный за край падает и рассыпается.
+    fn separate(&mut self) {
+        let mut order: Vec<usize> = (0..self.heaps.len()).collect();
+        order.sort_by(|&a, &b| {
+            let (ha, hb) = (&self.heaps[a], &self.heaps[b]);
+            ha.surface.cmp(&hb.surface).then(ha.x.total_cmp(&hb.x))
+        });
+        for pair in order.windows(2) {
+            let (l, r) = (pair[0], pair[1]);
+            if self.heaps[l].surface != self.heaps[r].surface {
+                continue;
+            }
+            let need = self.heaps[l].half_width() + self.heaps[r].half_width();
+            if self.heaps[r].x - self.heaps[l].x < need {
+                self.heaps[r].x = self.heaps[l].x + need + 0.01;
+            }
+        }
+    }
+
+    /// Мовер `m` врезался в цель `t`: поставить сверху или слить (тогда `true`, число
+    /// куч уменьшилось) либо просто остановиться (`false`).
+    fn collide(&mut self, m: usize, t: usize) -> bool {
         let single = self.heaps[m].tiers.len() == 1;
         let (mm, tm) = (self.heaps[m].mass(), self.heaps[t].mass());
         let merge_ok = single && self.heaps[t].tiers.len() == 1 && mm + tm <= MAX_MASS;
@@ -252,13 +311,13 @@ impl Sim {
                     target.tiers[0] += mover.tiers[0];
                 }
                 target.vx = (target.vx + mover.vx) * 0.3;
+                target.age = 0.0;
+                true
             }
             _ => {
-                // упёрлись: мовер останавливается вплотную
-                let side = if self.heaps[m].x >= self.heaps[t].x { 1.0 } else { -1.0 };
-                let tx = self.heaps[t].x;
-                self.heaps[m].x = tx + side * (need + 0.01);
+                // упёрлись: мовер останавливается, раздвинет их `separate`
                 self.heaps[m].vx = 0.0;
+                false
             }
         }
     }
@@ -440,7 +499,7 @@ mod tests {
     }
 
     fn heap_at(x: f32, mass: f32, kind: Kind, vx: f32) -> Heap {
-        Heap { surface: 5, x, vx, tiers: vec![mass], kind, anchor: (108.0, 300.0), seed: 1 }
+        Heap { surface: 5, x, vx, tiers: vec![mass], kind, anchor: (108.0, 300.0), seed: 1, age: 0.0 }
     }
 
     #[test]
@@ -542,6 +601,105 @@ mod tests {
         assert_eq!(u.heaps.len(), 2);
         assert_eq!(u.heaps[0].tiers.len() + u.heaps[1].tiers.len(), 2);
         assert!((u.heaps[0].x - u.heaps[1].x).abs() >= 18.0, "шары накладываются друг на друга");
+    }
+
+    #[test]
+    fn too_many_snowmen_or_balls_make_the_oldest_fall_apart() {
+        // восемь снеговиков вдали друг от друга: остаются пять самых новых
+        let mut s = bare(Kind::Snow);
+        for i in 0..8 {
+            let mut h = heap_at(160.0 + i as f32 * 80.0, PI * 100.0, Kind::Snow, 0.0);
+            h.tiers = vec![PI * 100.0, PI * 49.0, PI * 25.0];
+            h.age = (8 - i) as f32; // самый левый — самый старый
+            s.heaps.push(h);
+        }
+        let before: f32 = s.heaps.iter().map(|h| h.mass()).sum();
+        s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+        assert_eq!(s.heaps.iter().filter(|h| h.tiers.len() >= 2).count(), MAX_SNOWMEN);
+        assert!(s.heaps.iter().all(|h| h.x > 160.0 + 2.5 * 80.0), "остались не самые новые: {:?}", s.heaps.iter().map(|h| h.x).collect::<Vec<_>>());
+        // рассыпавшиеся стали частицами, масса цела
+        assert!(!s.particles.is_empty());
+        let after: f32 = s.heaps.iter().map(|h| h.mass()).sum::<f32>() + debris_mass(&s);
+        assert!((after - before).abs() < before * 0.001 + 1.0, "{after} против {before}");
+
+        // и просто шары: больше предела не бывает
+        let mut t = bare(Kind::Snow);
+        for i in 0..20 {
+            let mut h = heap_at(130.0 + i as f32 * 35.0, PI * 30.0, Kind::Snow, 0.0);
+            h.age = (20 - i) as f32;
+            t.heaps.push(h);
+        }
+        t.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+        assert_eq!(t.heaps.len(), MAX_HEAPS);
+        // новый снеговик (после постановки шара сверху) считается свежим и не рассыпается первым
+        let mut u = bare(Kind::Snow);
+        u.heaps.push(heap_at(400.0, PI * 100.0, Kind::Snow, 0.0));
+        u.heaps[0].age = 50.0;
+        u.heaps.push(heap_at(412.0, PI * 25.0, Kind::Snow, -90.0));
+        u.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+        assert_eq!(u.heaps[0].tiers.len(), 2);
+        assert!(u.heaps[0].age < 1.0, "возраст не обнулился: {}", u.heaps[0].age);
+    }
+
+    #[test]
+    fn a_crowd_of_snowmen_never_hangs_the_collision_loop() {
+        // Десять и больше снеговиков вплотную друг к другу: прежний цикл упирался и
+        // отодвигал шары по кругу бесконечно, и приложение зависало.
+        for count in [3, 10, 24] {
+            let mut s = bare(Kind::Snow);
+            for i in 0..count {
+                let mut h = heap_at(300.0 + i as f32 * 3.0, PI * 100.0, Kind::Snow, if i % 2 == 0 { 120.0 } else { -120.0 });
+                h.tiers = vec![PI * 100.0, PI * 49.0, PI * 25.0];
+                s.heaps.push(h);
+            }
+            let before: f32 = s.heaps.iter().map(|h| h.mass()).sum();
+            for frame in 0..180 {
+                // курсор ходит туда-сюда среди них и толкает
+                let x = 300.0 + (frame as f32 * 5.0) % 200.0;
+                s.step(1.0 / 60.0, (x, 296.0), (150.0, 0.0));
+            }
+            // выжившие шары не налезают друг на друга
+            let mut live: Vec<&Heap> = s.heaps.iter().collect();
+            live.sort_by(|a, b| a.x.total_cmp(&b.x));
+            for w in live.windows(2) {
+                assert!(w[1].x - w[0].x >= w[0].half_width() + w[1].half_width() - 0.5, "{count}: шары наложились");
+            }
+            // масса цела: то, что не стоит, рассыпалось в частицы (и немного осталось в счётчике срыва)
+            let after: f32 = s.heaps.iter().map(|h| h.mass()).sum::<f32>() + debris_mass(&s) + pile_mass(&s);
+            assert!((after - before).abs() < before * 0.01 + 5.0, "{count}: масса {after} против {before}");
+        }
+    }
+
+    /// Случайные расстановки вплотную стоящих шаров и куч: шаг обязан кончаться, шары —
+    /// не налезать друг на друга, масса — сохраняться. Прежний цикл столкновений
+    /// зависал уже на пяти шарах.
+    #[test]
+    fn random_crowds_always_terminate_and_stay_apart() {
+        let mut seed: u64 = 12345;
+        let mut rnd = move |lo: f32, hi: f32| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            lo + (hi - lo) * ((seed >> 40) as f32 / (1u64 << 24) as f32)
+        };
+        for round in 0..1500 {
+            let kind = [Kind::Snow, Kind::Sand, Kind::Leaves][round % 3];
+            let mut s = bare(kind);
+            for _ in 0..(3 + round % 12) {
+                let mut h = heap_at(rnd(250.0, 420.0), PI * rnd(20.0, 150.0), kind, rnd(-200.0, 200.0));
+                if kind == Kind::Snow && rnd(0.0, 1.0) < 0.6 {
+                    h.tiers = vec![PI * rnd(60.0, 150.0), PI * rnd(20.0, 55.0), PI * rnd(8.0, 20.0)];
+                }
+                s.heaps.push(h);
+            }
+            let before: f32 = s.heaps.iter().map(|h| h.mass()).sum();
+            s.step(1.0 / 60.0, (rnd(250.0, 420.0), 296.0), (rnd(-200.0, 200.0), 0.0));
+            let mut live: Vec<&Heap> = s.heaps.iter().collect();
+            live.sort_by(|a, b| a.x.total_cmp(&b.x));
+            for w in live.windows(2) {
+                assert!(w[1].x - w[0].x >= w[0].half_width() + w[1].half_width() - 0.5, "раунд {round}: шары наложились");
+            }
+            let after: f32 = s.heaps.iter().map(|h| h.mass()).sum::<f32>() + debris_mass(&s);
+            assert!((after - before).abs() < before * 0.001 + 1.0, "раунд {round}: масса {after} против {before}");
+        }
     }
 
     #[test]

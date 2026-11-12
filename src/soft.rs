@@ -401,7 +401,7 @@ mod tests {
                 *h = 3.0;
             }
             let pi = std::f32::consts::PI;
-            let mk = |x: f32, tiers: Vec<f32>| Heap { surface: 5, x, vx: 0.0, tiers, kind, anchor: (168.0, 260.0), seed: x as u32 };
+            let mk = |x: f32, tiers: Vec<f32>| Heap { surface: 5, x, vx: 0.0, tiers, kind, anchor: (168.0, 260.0), seed: x as u32, age: 0.0 };
             if kind == Kind::Snow {
                 sim.heaps.push(mk(260.0, vec![pi * 169.0, pi * 64.0, pi * 25.0])); // снеговик
                 sim.heaps.push(mk(340.0, vec![pi * 100.0, pi * 36.0])); // двухъярусный
