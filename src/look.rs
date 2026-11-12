@@ -27,6 +27,10 @@ pub enum FlakeShape {
     /// Луна с фазой от 0 до 1: 0 — новолуние, 0.5 — полнолуние. Растущая
     /// освещена справа, убывающая — слева.
     Moon(f32),
+    /// Луч света: клин, который расходится от левого конца (источника) к
+    /// правому, мягкий по краям и затухающий вдаль. Полудлина — `half[0]`,
+    /// полуширина на дальнем конце — `half[1]`.
+    Beam,
 }
 
 impl FlakeShape {
@@ -37,6 +41,7 @@ impl FlakeShape {
             FlakeShape::Leaf => (1.0, 0.0),
             FlakeShape::Glow => (2.0, 0.0),
             FlakeShape::Moon(phase) => (3.0, phase),
+            FlakeShape::Beam => (4.0, 0.0),
         }
     }
 }
@@ -70,6 +75,11 @@ pub fn flake(p: &Particle) -> FlakeLook {
     FlakeLook { center: [p.x, p.y], half, rotation, shape, color }
 }
 
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Доля пикселя, покрытая фигурой. `x`, `y` — точка в осях фигуры, `a`, `b` —
 /// полуразмеры; всё в пикселях. Та же формула, что в шейдере.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -100,6 +110,14 @@ pub fn coverage(shape: FlakeShape, x: f32, y: f32, a: f32, b: f32) -> f32 {
             let c = (std::f32::consts::TAU * phase).cos();
             let edge = if phase < 0.5 { x - c * w * a } else { -c * w * a - x };
             disk * (edge + 0.5).clamp(0.0, 1.0)
+        }
+        FlakeShape::Beam => {
+            // u: 0 у источника, 1 на дальнем конце; ширина растёт вместе с u
+            let u = (x + a) / (2.0 * a);
+            let width = (b * u).max(0.75);
+            let across = smoothstep(0.0, 1.0, 1.0 - y.abs() / width);
+            let along = (1.0 - u).max(0.0) * smoothstep(0.0, 0.03, u);
+            across * along
         }
     }
 }

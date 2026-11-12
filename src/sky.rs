@@ -11,6 +11,11 @@ use std::f32::consts::{PI, TAU};
 use crate::clock::Clock;
 use crate::look::{FlakeLook, FlakeShape, hash01};
 
+/// Радиус диска солнца, точки.
+pub const SUN_R: f32 = 22.0;
+/// Сколько лучей у солнца.
+const BEAMS: usize = 18;
+
 /// Сколько фигур небо может отдать за кадр (под него запасён буфер на GPU).
 pub const SKY_MAX: usize = 256;
 
@@ -190,31 +195,46 @@ impl Sky {
             self.stars(w, h, c.alpha, out);
             self.moon([cx, cy], c, out);
         } else {
-            self.sun([cx, cy], horizon, c.alpha, out);
+            self.sun([cx, cy], horizon, c.alpha, w, h, out);
         }
         out.truncate(start + SKY_MAX);
     }
 
-    fn sun(&self, c: [f32; 2], horizon: f32, a: f32, out: &mut Vec<FlakeLook>) {
-        const R: f32 = 24.0;
-        // у горизонта солнце краснее
-        let col = mix([1.0, 0.86, 0.35], [1.0, 0.45, 0.15], horizon.powf(1.6));
-        out.push(shape(c, [R * 3.4; 2], 0.0, FlakeShape::Glow, col, 0.65 * a));
-        // лучи: длинные и короткие вперемежку, медленно вращаются и пульсируют
-        let spin = self.anim * 0.10;
-        for i in 0..16 {
-            let long = i % 2 == 0;
-            let ang = spin + i as f32 * TAU / 16.0;
+    /// Солнце: мягкое свечение, раскалённое ядро и веер длинных лучей, которые
+    /// расходятся в сторону центра экрана — как лучи света, пробивающиеся сквозь дымку.
+    fn sun(&self, c: [f32; 2], horizon: f32, a: f32, w: f32, h: f32, out: &mut Vec<FlakeLook>) {
+        // у горизонта свет краснее
+        let red = horizon.powf(1.6);
+        let col = mix([1.0, 0.86, 0.40], [1.0, 0.45, 0.15], red);
+        let ray = mix([1.0, 0.80, 0.40], [1.0, 0.48, 0.18], red);
+        let hot = mix([1.0, 0.97, 0.80], [1.0, 0.70, 0.40], red);
+
+        out.push(shape(c, [SUN_R * 5.0; 2], 0.0, FlakeShape::Glow, col, 0.45 * a));
+        // лучи идут от солнца к центру экрана: у солнца в углу — вниз и в сторону
+        let diag = (w * w + h * h).sqrt();
+        let base = (h * 0.5 - c[1]).atan2(w * 0.5 - c[0]);
+        let spread = 0.62;
+        for i in 0..BEAMS {
+            let k = 1000 + i as u32 * 8;
+            let frac = i as f32 / (BEAMS - 1) as f32;
+            let off = (frac - 0.5) * 2.0 * spread + (hash01(k) - 0.5) * 0.05;
+            // каждый луч медленно покачивается и мерцает по-своему
+            let sway = (self.anim * 0.18 + hash01(k + 1) * TAU).sin() * 0.025;
+            let pulse = 0.75 + 0.25 * (self.anim * 0.6 + hash01(k + 2) * TAU).sin();
+            let ang = base + off + sway;
+            let len = diag * (0.32 + 0.45 * hash01(k + 3));
+            // каждый третий луч — тонкий и яркий, остальные — широкие и мягкие
+            let thin = i % 3 == 1;
+            let width = if thin { 3.0 + 4.0 * hash01(k + 4) } else { 26.0 + 70.0 * hash01(k + 4).powi(2) };
+            let centre = 1.0 - (off / spread).abs() * 0.5;
+            let alpha = (0.22 + 0.25 * hash01(k + 5)) * if thin { 1.1 } else { 1.0 } * centre * pulse * a;
             let (s, co) = ang.sin_cos();
-            let len = if long { R * 1.1 } else { R * 0.6 };
-            let mid = R * 1.4 + len * 0.5;
-            let pulse = 0.65 + 0.25 * (self.anim * 1.4 + i as f32 * 0.9).sin();
-            let thick = if long { 2.0 } else { 1.4 };
-            out.push(shape([c[0] + co * mid, c[1] + s * mid], [len * 0.5, thick], ang, FlakeShape::Capsule, col, 0.9 * pulse * a));
+            let mid = SUN_R * 0.5 + len * 0.5;
+            out.push(shape([c[0] + co * mid, c[1] + s * mid], [len * 0.5, width], ang, FlakeShape::Beam, ray, alpha));
         }
-        out.push(shape(c, [R, R], 0.0, FlakeShape::Capsule, col, 0.95 * a));
-        let light = mix(col, [1.0, 1.0, 0.85], 0.6);
-        out.push(shape([c[0] - R * 0.12, c[1] - R * 0.12], [R * 0.62; 2], 0.0, FlakeShape::Capsule, light, 0.45 * a));
+        out.push(shape(c, [SUN_R * 2.8; 2], 0.0, FlakeShape::Glow, col, 0.85 * a));
+        out.push(shape(c, [SUN_R * 1.5; 2], 0.0, FlakeShape::Glow, hot, 0.9 * a));
+        out.push(shape(c, [SUN_R * 0.85; 2], 0.0, FlakeShape::Capsule, hot, a));
     }
 
     fn moon(&self, c: [f32; 2], cel: Celestial, out: &mut Vec<FlakeLook>) {
@@ -340,8 +360,8 @@ mod tests {
     fn day_has_rays_and_night_has_moon_and_stars() {
         let mut day = Vec::new();
         Sky::new(SkyMode::Sun, at(12.5, 5.5)).looks(1440.0, 900.0, &mut day);
-        let rays = day.iter().filter(|f| f.half[0] > f.half[1] * 1.5).count();
-        assert_eq!(rays, 16);
+        let beams = day.iter().filter(|f| f.shape == FlakeShape::Beam).count();
+        assert_eq!(beams, BEAMS);
         assert!(day.iter().any(|f| f.shape == FlakeShape::Glow));
         let mut night = Vec::new();
         Sky::new(SkyMode::Moon, at(1.0, 5.5)).looks(1440.0, 900.0, &mut night);
@@ -357,7 +377,7 @@ mod tests {
             let mut out = Vec::new();
             sky.looks(1440.0, 900.0, &mut out);
             // тело — самая крупная заливка из последних фигур: берём диск-ядро
-            let body = out.iter().rev().find(|f| matches!(f.shape, FlakeShape::Moon(_)) || f.half == [24.0, 24.0]);
+            let body = out.iter().rev().find(|f| matches!(f.shape, FlakeShape::Moon(_)) || (f.shape == FlakeShape::Capsule && f.half == [SUN_R * 0.85, SUN_R * 0.85]));
             body.map(|f| f.center).unwrap()
         };
         for hour in [9.0, 12.5, 17.0] {
@@ -369,6 +389,41 @@ mod tests {
         }
         // по дуге положение зависит от времени
         assert_ne!(center(SkyPlace::Arc, SkyMode::Sun, 9.0), center(SkyPlace::Arc, SkyMode::Sun, 12.5));
+    }
+
+    #[test]
+    fn sun_beams_fan_out_toward_the_screen_centre() {
+        let mut sky = Sky::new(SkyMode::Sun, at(12.5, 5.5));
+        sky.set_place(SkyPlace::Right);
+        let mut out = Vec::new();
+        sky.looks(1440.0, 900.0, &mut out);
+        let sun = [1440.0 - CORNER_X, TOP_Y];
+        let to_centre = (450.0f32 - sun[1]).atan2(720.0 - sun[0]);
+        let beams: Vec<_> = out.iter().filter(|f| f.shape == FlakeShape::Beam).collect();
+        for b in &beams {
+            // каждый луч выходит из солнца и смотрит примерно к центру экрана
+            let (s, c) = b.rotation.sin_cos();
+            let start = [b.center[0] - c * b.half[0], b.center[1] - s * b.half[0]];
+            assert!((start[0] - sun[0]).abs() < 15.0 && (start[1] - sun[1]).abs() < 15.0);
+            assert!((b.rotation - to_centre).abs() < 0.7, "{} против {}", b.rotation, to_centre);
+        }
+        // лучи разной ширины: и тонкие, и широкие
+        let widths: Vec<f32> = beams.iter().map(|b| b.half[1]).collect();
+        assert!(widths.iter().any(|w| *w < 8.0) && widths.iter().any(|w| *w > 25.0));
+    }
+
+    #[test]
+    fn beam_coverage_fades_along_and_across() {
+        let c = |x: f32, y: f32| crate::look::coverage(FlakeShape::Beam, x, y, 300.0, 40.0);
+        // вдоль оси ярче у источника, чем вдали; за концами пусто
+        assert!(c(-250.0, 0.0) > c(100.0, 0.0) && c(100.0, 0.0) > c(280.0, 0.0));
+        assert_eq!(c(-310.0, 0.0), 0.0);
+        assert!(c(299.0, 0.0) < 0.02);
+        // поперёк — мягкий край, за краем клина пусто
+        assert!(c(0.0, 0.0) > c(0.0, 10.0) && c(0.0, 10.0) > c(0.0, 18.0));
+        assert_eq!(c(0.0, 30.0), 0.0);
+        // клин расширяется: на одном и том же смещении вдали ещё светло, а у источника уже пусто
+        assert!(c(250.0, 8.0) > 0.0 && c(-250.0, 8.0) == 0.0);
     }
 
     #[test]

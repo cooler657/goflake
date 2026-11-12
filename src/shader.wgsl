@@ -26,7 +26,7 @@ struct FlakeOut {
     @builtin(position) pos: vec4f,
     @location(0) local: vec2f,    // точка в осях фигуры, физические пиксели
     @location(1) half: vec2f,     // полуразмеры в физических пикселях
-    @location(2) shape: f32,      // 0 — крупинка или штрих, 1 — лист, 2 — свечение, 3 — луна
+    @location(2) shape: f32,      // 0 — крупинка или штрих, 1 — лист, 2 — свечение, 3 — луна, 4 — луч
     @location(3) color: vec4f,
     @location(4) param: f32,      // фаза луны
 }
@@ -78,7 +78,7 @@ fn fs_flake(in: FlakeOut) -> @location(0) vec4f {
         // свечение: яркость падает от центра к краю по квадрату
         let gl = clamp(1.0 - length(in.local) / a, 0.0, 1.0);
         cover = gl * gl;
-    } else {
+    } else if in.shape < 3.5 {
         // луна: диск, освещённый до терминатора (половины эллипса)
         let disk = clamp(a - length(in.local) + 0.5, 0.0, 1.0);
         let v = clamp(in.local.y / a, -1.0, 1.0);
@@ -91,6 +91,13 @@ fn fs_flake(in: FlakeOut) -> @location(0) vec4f {
             edge = -c * w * a - in.local.x;
         }
         cover = disk * clamp(edge + 0.5, 0.0, 1.0);
+    } else {
+        // луч: клин от источника (левый конец), мягкий по краям, затухает вдаль
+        let u = (in.local.x + a) / (2.0 * a);
+        let width = max(b * u, 0.75);
+        let across = smoothstep(0.0, 1.0, 1.0 - abs(in.local.y) / width);
+        let along = max(1.0 - u, 0.0) * smoothstep(0.0, 0.03, u);
+        cover = across * along;
     }
     let alpha = in.color.a * cover;
     if alpha <= 0.002 {

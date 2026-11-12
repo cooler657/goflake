@@ -12,6 +12,30 @@ use crate::look::{self, FEATHER_PX, FlakeShape, SHADOW_PX, SHADOW_RGB};
 use crate::sim::Sim;
 use crate::sky::Sky;
 
+/// Отрезок `dx` на строке со смещением `dy` от центра, в котором точка лежит
+/// внутри прямоугольника с полуразмерами `a` и `b`, повёрнутого на угол с
+/// данными `sin` и `cos`. Нет пересечения — `None`.
+fn row_span(dy: f32, sin: f32, cos: f32, a: f32, b: f32) -> Option<(f32, f32)> {
+    let (mut lo, mut hi) = (f32::NEG_INFINITY, f32::INFINITY);
+    // |dx·cos + dy·sin| ≤ a
+    if cos.abs() > 1e-4 {
+        let (p, q) = ((-a - dy * sin) / cos, (a - dy * sin) / cos);
+        lo = lo.max(p.min(q));
+        hi = hi.min(p.max(q));
+    } else if (dy * sin).abs() > a {
+        return None;
+    }
+    // |−dx·sin + dy·cos| ≤ b
+    if sin.abs() > 1e-4 {
+        let (p, q) = ((dy * cos - b) / sin, (dy * cos + b) / sin);
+        lo = lo.max(p.min(q));
+        hi = hi.min(p.max(q));
+    } else if (dy * cos).abs() > b {
+        return None;
+    }
+    (lo <= hi).then_some((lo, hi))
+}
+
 pub struct Canvas {
     pub width: usize,
     pub height: usize,
@@ -89,18 +113,23 @@ impl Canvas {
     fn flake(&mut self, f: &look::FlakeLook, scale: f32) {
         let (cx, cy) = (f.center[0] * scale, f.center[1] * scale);
         let (a, b) = (f.half[0] * scale, f.half[1] * scale);
-        let reach = a.max(b) + 1.0;
-        let x0 = (cx - reach).floor().max(0.0) as usize;
-        let y0 = (cy - reach).floor().max(0.0) as usize;
-        let x1 = ((cx + reach).ceil() as isize).min(self.width as isize);
-        let y1 = ((cy + reach).ceil() as isize).min(self.height as isize);
-        if x1 <= 0 || y1 <= 0 {
+        let (sin, cos) = f.rotation.sin_cos();
+        // повёрнутый прямоугольник фигуры с запасом в пиксель
+        let (ra, rb) = (a + 1.0, b + 1.0);
+        let reach_y = ra * sin.abs() + rb * cos.abs();
+        let y0 = (cy - reach_y).floor().max(0.0) as usize;
+        let y1 = ((cy + reach_y).ceil() as isize).min(self.height as isize);
+        if y1 <= 0 {
             return;
         }
-        let (sin, cos) = f.rotation.sin_cos();
         let rgb = [f.color[0], f.color[1], f.color[2]];
         for y in y0..y1 as usize {
-            for x in x0..x1 as usize {
+            // на каждой строке обходим только то, что лежит внутри прямоугольника,
+            // а не весь охватывающий квадрат — длинные наклонные лучи иначе слишком дороги
+            let Some((lo, hi)) = row_span(y as f32 + 0.5 - cy, sin, cos, ra, rb) else { continue };
+            let x0 = (cx + lo - 1.0).floor().max(0.0) as usize;
+            let x1 = ((cx + hi + 1.0).ceil() as isize).min(self.width as isize).max(0) as usize;
+            for x in x0..x1 {
                 // центр пикселя в осях частицы
                 let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
                 let (lx, ly) = (dx * cos + dy * sin, -dx * sin + dy * cos);
@@ -235,6 +264,29 @@ mod tests {
     }
 
     #[test]
+    fn row_span_contains_every_point_of_a_rotated_rectangle() {
+        let (a, b) = (40.0f32, 6.0f32);
+        for k in 0..24 {
+            let ang = k as f32 * 0.27;
+            let (sin, cos) = ang.sin_cos();
+            // точки внутри прямоугольника в его осях → на экран
+            for i in -8..=8 {
+                for j in -4..=4 {
+                    let (lx, ly) = (i as f32 / 8.0 * a * 0.999, j as f32 / 4.0 * b * 0.999);
+                    let (dx, dy) = (lx * cos - ly * sin, lx * sin + ly * cos);
+                    let (lo, hi) = row_span(dy, sin, cos, a, b).expect("точка внутри, а отрезка нет");
+                    assert!(lo - 1e-3 <= dx && dx <= hi + 1e-3, "угол {ang}: {dx} вне [{lo}, {hi}]");
+                }
+            }
+        }
+        // далеко от прямоугольника отрезка нет
+        assert!(row_span(500.0, 0.0, 1.0, a, b).is_none());
+        // горизонтальный и вертикальный случаи
+        assert!(row_span(0.0, 0.0, 1.0, a, b).is_some());
+        assert!(row_span(0.0, 1.0, 0.0, a, b).is_some());
+    }
+
+    #[test]
     fn sky_is_hidden_behind_windows() {
         let mut sim = Sim::new(1);
         sim.w = 960.0;
@@ -246,7 +298,7 @@ mod tests {
 
         let mut open = Canvas::new();
         open.draw(&sim, &sun, 1.0);
-        assert!(alpha(&open, 870, 96) > 200 && alpha(&open, 830, 96) > 200, "солнце не нарисовано");
+        assert!(alpha(&open, 870, 96) > 200 && alpha(&open, 860, 96) > 200, "солнце не нарисовано");
 
         // окно закрывает правую половину солнца и больше ничего
         let win = [WindowInfo { id: 5, rect: Rect::new(870.0, 50.0, 400.0, 300.0) }];
@@ -255,8 +307,8 @@ mod tests {
         covered.draw(&sim, &sun, 1.0);
         assert_eq!(alpha(&covered, 880, 96), 0, "за окном небо должно пропасть");
         assert_eq!(alpha(&covered, 940, 300), 0);
-        assert!(alpha(&covered, 830, 96) > 200, "вне окна небо остаётся");
-        assert_eq!(covered.pixels[96 * covered.width + 830], open.pixels[96 * open.width + 830]);
+        assert!(alpha(&covered, 860, 96) > 200, "вне окна небо остаётся");
+        assert_eq!(covered.pixels[96 * covered.width + 860], open.pixels[96 * open.width + 860]);
     }
 
     #[test]
