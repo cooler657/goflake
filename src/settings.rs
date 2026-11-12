@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::materials::{KINDS, Kind};
-use crate::sky::{MODES, SkyMode};
+use crate::sky::{MODES, PLACES, SkyMode, SkyPlace};
 
 /// Интенсивности: название и число снежинок в секунду на 1000 точек ширины
 /// (для других материалов умножается на `Material::rate`).
@@ -17,6 +17,14 @@ pub const SCENES: usize = KINDS.len() + 1;
 
 /// Число вариантов неба в меню.
 pub const SKIES: usize = MODES.len();
+
+/// Число вариантов положения неба в меню.
+pub const PLACE_COUNT: usize = PLACES.len();
+
+/// Название варианта положения неба в меню.
+pub fn place_label(place: usize) -> &'static str {
+    PLACES[place.min(PLACE_COUNT - 1)].label()
+}
 
 /// Название варианта неба в меню.
 pub fn sky_label(sky: usize) -> &'static str {
@@ -36,6 +44,8 @@ pub struct Settings {
     pub scene: usize,
     /// Что на небе: номер в `sky::MODES`.
     pub sky: usize,
+    /// Где находится небо: номер в `sky::PLACES`.
+    pub sky_place: usize,
     /// Режим «не засыпать содержимое окон».
     pub solid: bool,
     /// Аппаратное ускорение: рисовать на видеокарте, а не программно.
@@ -44,7 +54,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { rate: 1, scene: 0, sky: 1, solid: false, gpu: true }
+        Self { rate: 1, scene: 0, sky: 1, sky_place: 2, solid: false, gpu: true }
     }
 }
 
@@ -73,6 +83,11 @@ impl Settings {
                         s.sky = i.min(SKIES - 1);
                     }
                 }
+                ("sky_place", v) => {
+                    if let Ok(i) = v.parse::<usize>() {
+                        s.sky_place = i.min(PLACE_COUNT - 1);
+                    }
+                }
                 ("solid", v) => s.solid = v == "1" || v == "true",
                 ("gpu", v) => s.gpu = v != "0" && v != "false",
                 _ => {}
@@ -91,8 +106,20 @@ impl Settings {
             let _ = fs::create_dir_all(dir);
         }
         let text =
-            format!("rate={}\nscene={}\nsky={}\nsolid={}\ngpu={}\n", self.rate, self.scene, self.sky, self.solid as u8, self.gpu as u8);
+            format!("rate={}\nscene={}\nsky={}\nsky_place={}\nsolid={}\ngpu={}\n",
+                self.rate,
+                self.scene,
+                self.sky,
+                self.sky_place,
+                self.solid as u8,
+                self.gpu as u8
+            );
         let _ = fs::write(p, text);
+    }
+
+    /// Где должно быть небо.
+    pub fn sky_place_value(&self) -> SkyPlace {
+        PLACES[self.sky_place.min(PLACE_COUNT - 1)]
     }
 
     /// Что должно быть на небе.
@@ -113,12 +140,12 @@ mod tests {
     #[test]
     fn parses_and_ignores_garbage() {
         assert_eq!(
-            Settings::parse("rate=2\nscene=3\nsky=2\nsolid=1\ngpu=0\n"),
-            Settings { rate: 2, scene: 3, sky: 2, solid: true, gpu: false }
+            Settings::parse("rate=2\nscene=3\nsky=2\nsky_place=1\nsolid=1\ngpu=0\n"),
+            Settings { rate: 2, scene: 3, sky: 2, sky_place: 1, solid: true, gpu: false }
         );
         assert_eq!(
-            Settings::parse("rate=99\nчто-то\nscene=99\nsky=99\nsolid=0"),
-            Settings { rate: 2, scene: 4, sky: 3, solid: false, gpu: true }
+            Settings::parse("rate=99\nчто-то\nscene=99\nsky=99\nsky_place=99\nsolid=0"),
+            Settings { rate: 2, scene: 4, sky: 3, sky_place: 2, solid: false, gpu: true }
         );
         assert_eq!(Settings::parse(""), Settings::default());
     }
@@ -138,5 +165,7 @@ mod tests {
         assert_eq!(sky(1), SkyMode::Auto);
         assert_eq!(sky(3), SkyMode::Moon);
         assert_eq!(sky_label(1), SkyMode::Auto.label());
+        assert_eq!(Settings::default().sky_place_value(), SkyPlace::Right);
+        assert_eq!(place_label(1), SkyPlace::Left.label());
     }
 }

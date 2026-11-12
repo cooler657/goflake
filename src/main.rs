@@ -105,6 +105,7 @@ impl App {
             running: self.running,
             scene: self.settings.scene,
             sky: self.settings.sky,
+            sky_place: self.settings.sky_place,
             rate: self.settings.rate,
             solid: self.settings.solid,
             dock: self.platform.dock_access(),
@@ -278,6 +279,11 @@ impl App {
                 self.sky.set_mode(self.settings.sky_mode());
                 self.settings.save();
             }
+            Cmd::SkyPlace(i) => {
+                self.settings.sky_place = i.min(settings::PLACE_COUNT - 1);
+                self.sky.set_place(self.settings.sky_place_value());
+                self.settings.save();
+            }
             Cmd::Rate(i) => {
                 self.settings.rate = i.min(RATES.len() - 1);
                 self.sim.rate = RATES[self.settings.rate].1;
@@ -385,7 +391,11 @@ fn main() {
         proxy: event_loop.create_proxy(),
         settings,
         sim,
-        sky: Sky::new(settings.sky_mode(), clock::now()),
+        sky: {
+            let mut sky = Sky::new(settings.sky_mode(), clock::now());
+            sky.set_place(settings.sky_place_value());
+            sky
+        },
         platform,
         overlay: None,
         tray: None,
@@ -393,6 +403,7 @@ fn main() {
             running: true,
             scene: settings.scene,
             sky: settings.sky,
+            sky_place: settings.sky_place,
             rate: settings.rate,
             solid: settings.solid,
             dock: None,

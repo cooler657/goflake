@@ -140,7 +140,7 @@ mod tests {
     use crate::materials::KINDS;
     use crate::clock::Clock;
     use crate::sim::{Rect, WindowInfo};
-    use crate::sky::SkyMode;
+    use crate::sky::{SkyMode, SkyPlace};
 
     fn sky(mode: SkyMode) -> Sky {
         Sky::new(mode, Clock { hour: 12.5, season: 5.5, unix: 0.0 })
@@ -225,12 +225,15 @@ mod tests {
             ("sky_crescent", SkyMode::Auto, at(21.5, 5.5, 0.12)),
             ("sky_waning", SkyMode::Auto, at(3.0, 5.5, 0.85)),
             ("sky_newmoon", SkyMode::Moon, at(1.0, 5.5, 0.0)),
+            ("sky_corner_sun", SkyMode::Sun, at(13.0, 5.5, 0.5)),
+            ("sky_corner_moon", SkyMode::Moon, at(22.5, 5.5, 0.35)),
         ];
         for (name, mode, clock) in scenes {
             let mut sim = Sim::new(1);
             sim.w = 960.0;
             sim.h = 540.0;
             let mut sky = Sky::new(mode, clock);
+            sky.set_place(if name.contains("corner") { SkyPlace::Right } else { SkyPlace::Arc });
             sky.step(7.0);
             let mut canvas = Canvas::new();
             canvas.draw(&sim, &sky, 1.0);

@@ -40,6 +40,35 @@ impl SkyMode {
     }
 }
 
+/// Где на экране находится солнце или луна.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkyPlace {
+    /// Идёт по дуге вдоль верха экрана вслед за временем суток.
+    Arc,
+    /// Стоит в левом верхнем углу.
+    Left,
+    /// Стоит в правом верхнем углу.
+    Right,
+}
+
+pub const PLACES: [SkyPlace; 3] = [SkyPlace::Arc, SkyPlace::Left, SkyPlace::Right];
+
+impl SkyPlace {
+    /// Название в меню.
+    pub fn label(self) -> &'static str {
+        match self {
+            SkyPlace::Arc => "По дуге вдоль верха экрана",
+            SkyPlace::Left => "В левом верхнем углу",
+            SkyPlace::Right => "В правом верхнем углу",
+        }
+    }
+}
+
+/// Отступ тела от бокового края экрана в углу, точки.
+const CORNER_X: f32 = 90.0;
+/// Высота центра тела над экраном: ниже строки меню вместе с лучами и свечением.
+const TOP_Y: f32 = 96.0;
+
 /// Время восхода и заката, часы. Дни длиннее летом и короче зимой
 /// (северное полушарие); полдень — в 12:30.
 pub fn sun_hours(season: f32) -> (f32, f32) {
@@ -116,6 +145,7 @@ fn shape(center: [f32; 2], half: [f32; 2], rotation: f32, shape: FlakeShape, rgb
 
 pub struct Sky {
     mode: SkyMode,
+    place: SkyPlace,
     clock: Clock,
     phase: f32,
     /// Время для анимации (вращение лучей, мерцание), секунды.
@@ -124,11 +154,15 @@ pub struct Sky {
 
 impl Sky {
     pub fn new(mode: SkyMode, clock: Clock) -> Self {
-        Self { mode, clock, phase: moon_phase(clock.unix), anim: 0.0 }
+        Self { mode, place: SkyPlace::Arc, clock, phase: moon_phase(clock.unix), anim: 0.0 }
     }
 
     pub fn set_mode(&mut self, mode: SkyMode) {
         self.mode = mode;
+    }
+
+    pub fn set_place(&mut self, place: SkyPlace) {
+        self.place = place;
     }
 
     pub fn set_clock(&mut self, clock: Clock) {
@@ -144,10 +178,14 @@ impl Sky {
     pub fn looks(&self, w: f32, h: f32, out: &mut Vec<FlakeLook>) {
         let Some(c) = celestial(self.mode, self.clock) else { return };
         let start = out.len();
-        // дуга: у горизонта ниже, в зените выше; под строкой меню
+        // насколько тело близко к горизонту: от этого оно ниже на дуге и краснее
         let horizon = 1.0 - (PI * c.t).sin();
-        let cx = w * (0.08 + 0.84 * c.t);
-        let cy = 96.0 + horizon * (h * 0.16).clamp(80.0, 180.0);
+        let (cx, cy) = match self.place {
+            // дуга: у горизонта ниже, в зените выше; под строкой меню
+            SkyPlace::Arc => (w * (0.08 + 0.84 * c.t), TOP_Y + horizon * (h * 0.16).clamp(80.0, 180.0)),
+            SkyPlace::Left => (CORNER_X, TOP_Y),
+            SkyPlace::Right => (w - CORNER_X, TOP_Y),
+        };
         if c.moon {
             self.stars(w, h, c.alpha, out);
             self.moon([cx, cy], c, out);
@@ -309,6 +347,28 @@ mod tests {
         Sky::new(SkyMode::Moon, at(1.0, 5.5)).looks(1440.0, 900.0, &mut night);
         assert!(night.iter().any(|f| matches!(f.shape, FlakeShape::Moon(_))));
         assert!(night.iter().filter(|f| f.shape == FlakeShape::Capsule).count() >= 40);
+    }
+
+    #[test]
+    fn corner_places_pin_the_body_regardless_of_time() {
+        let center = |place: SkyPlace, mode: SkyMode, hour: f32| {
+            let mut sky = Sky::new(mode, at(hour, 5.5));
+            sky.set_place(place);
+            let mut out = Vec::new();
+            sky.looks(1440.0, 900.0, &mut out);
+            // тело — самая крупная заливка из последних фигур: берём диск-ядро
+            let body = out.iter().rev().find(|f| matches!(f.shape, FlakeShape::Moon(_)) || f.half == [24.0, 24.0]);
+            body.map(|f| f.center).unwrap()
+        };
+        for hour in [9.0, 12.5, 17.0] {
+            assert_eq!(center(SkyPlace::Right, SkyMode::Sun, hour), [1440.0 - CORNER_X, TOP_Y]);
+            assert_eq!(center(SkyPlace::Left, SkyMode::Sun, hour), [CORNER_X, TOP_Y]);
+        }
+        for hour in [22.0, 1.0, 4.0] {
+            assert_eq!(center(SkyPlace::Right, SkyMode::Moon, hour), [1440.0 - CORNER_X, TOP_Y]);
+        }
+        // по дуге положение зависит от времени
+        assert_ne!(center(SkyPlace::Arc, SkyMode::Sun, 9.0), center(SkyPlace::Arc, SkyMode::Sun, 12.5));
     }
 
     #[test]
