@@ -63,7 +63,7 @@ pub fn flake(p: &Particle) -> FlakeLook {
             // штрих вытянут вдоль скорости: чем быстрее капля, тем он длиннее
             let speed = (p.vx * p.vx + p.vy * p.vy).sqrt();
             let radius = (p.r * 0.4).max(0.4);
-            ([radius + (speed * 0.007).clamp(1.0, 7.0), radius], p.vy.atan2(p.vx), FlakeShape::Capsule)
+            ([radius + (speed * m.streak).clamp(1.0, 14.0), radius], p.vy.atan2(p.vx), FlakeShape::Capsule)
         }
         Shape::Leaf => ([p.r, p.r * 0.5], p.angle, FlakeShape::Leaf),
     };
@@ -102,6 +102,15 @@ pub fn coverage(shape: FlakeShape, x: f32, y: f32, a: f32, b: f32) -> f32 {
             disk * (edge + 0.5).clamp(0.0, 1.0)
         }
     }
+}
+
+/// Цвет с прозрачностью, упакованный как пиксель растра `0xAARRGGBB` с цветом,
+/// умноженным на альфу.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn pack_premul(c: [f32; 4]) -> u32 {
+    let a = c[3].clamp(0.0, 1.0);
+    let ch = |v: f32| ((v.clamp(0.0, 1.0) * a * 255.0 + 0.5) as u32).min(255);
+    (((a * 255.0 + 0.5) as u32).min(255) << 24) | (ch(c[0]) << 16) | (ch(c[1]) << 8) | ch(c[2])
 }
 
 /// Затемнение прожилки листа: множитель яркости по расстоянию от оси, пиксели.

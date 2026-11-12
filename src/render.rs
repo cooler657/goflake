@@ -376,11 +376,13 @@ impl Renderer {
         };
 
         // небо рисуется под частицами и за окнами
+        let haze = sim.haze();
         self.looks.clear();
         sky.looks(sim.w, sim.h, &mut self.looks);
         let sky_n = self.looks.len();
         self.cut.clear();
-        if sky_n > 0 {
+        // вырезы нужны и небу, и дымке: за окнами их не должно быть
+        if sky_n > 0 || haze[3] > 0.0 {
             for r in sim.window_rects().iter().take(MAX_CUTS) {
                 let (x0, y0, x1, y1) = (r.min_x(), r.min_y(), r.max_x(), r.max_y());
                 let v = |x, y| PileVertex { pos: [x, y], color: [0.0; 4] };
@@ -416,8 +418,15 @@ impl Renderer {
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
-            // Для «прямой» альфы фон — прозрачный белый, чтобы края снега не темнели.
-            let c = if self.premul { 0.0 } else { 1.0 };
+            // Фон — дымка (у большинства материалов её нет, и он прозрачный). Для «прямой»
+            // альфы цвет фона белый, чтобы края не темнели.
+            let k = if self.premul { haze[3] } else { 1.0 };
+            let c = if haze[3] > 0.0 {
+                wgpu::Color { r: (haze[0] * k) as f64, g: (haze[1] * k) as f64, b: (haze[2] * k) as f64, a: haze[3] as f64 }
+            } else {
+                let w = if self.premul { 0.0 } else { 1.0 };
+                wgpu::Color { r: w, g: w, b: w, a: 0.0 }
+            };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("snow"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -425,7 +434,7 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: c, g: c, b: c, a: 0.0 }),
+                        load: wgpu::LoadOp::Clear(c),
                         store: wgpu::StoreOp::Store,
                     },
                 })],

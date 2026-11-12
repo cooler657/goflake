@@ -25,11 +25,11 @@ impl Canvas {
     }
 
     /// Очищает растр до прозрачного, при необходимости меняя размер.
-    fn reset(&mut self, width: usize, height: usize) {
+    fn reset(&mut self, width: usize, height: usize, fill: u32) {
         self.width = width;
         self.height = height;
         self.pixels.clear();
-        self.pixels.resize(width * height, 0);
+        self.pixels.resize(width * height, fill);
     }
 
     /// Накладывает цвет `rgb` с прозрачностью `alpha` (0–1) на пиксель.
@@ -53,15 +53,17 @@ impl Canvas {
     pub fn draw(&mut self, sim: &Sim, sky: &Sky, scale: f32) {
         let width = (sim.w * scale).ceil().max(1.0) as usize;
         let height = (sim.h * scale).ceil().max(1.0) as usize;
-        self.reset(width, height);
+        // фон — дымка (у большинства материалов её нет, и он прозрачный)
+        let haze = sim.haze();
+        self.reset(width, height, look::pack_premul(haze));
         // небо рисуется под частицами
         let mut looks = Vec::new();
         sky.looks(sim.w, sim.h, &mut looks);
         for f in &looks {
             self.flake(f, scale);
         }
-        // небо — за окнами: по их рамкам картинка вырезается
-        if !looks.is_empty() {
+        // небо и дымка — за окнами: по их рамкам картинка вырезается
+        if !looks.is_empty() || haze[3] > 0.0 {
             for r in sim.window_rects() {
                 self.clear_rect(r.min_x() * scale, r.min_y() * scale, r.max_x() * scale, r.max_y() * scale);
             }
@@ -203,6 +205,33 @@ mod tests {
             let row = 199 * canvas.width;
             assert!(canvas.pixels[row + 110..row + 490].iter().any(|p| p >> 24 > 60), "{kind:?}: нет кучи");
         }
+    }
+
+    #[test]
+    fn dust_haze_tints_the_screen_but_not_the_windows() {
+        let mut sim = Sim::new(1);
+        sim.w = 400.0;
+        sim.h = 300.0;
+        sim.rate = 0.0;
+        sim.set_kind(crate::materials::Kind::Dust);
+        let win = [WindowInfo { id: 5, rect: Rect::new(100.0, 100.0, 200.0, 120.0) }];
+        sim.refresh(&win, None, 0.05);
+        let mut canvas = Canvas::new();
+        canvas.draw(&sim, &sky(SkyMode::Off), 1.0);
+        let px = |x: usize, y: usize| canvas.pixels[y * canvas.width + x];
+        let outside = px(20, 20);
+        let a = (outside >> 24) as f32 / 255.0;
+        assert!((0.1..=0.19).contains(&a), "дымки нет: альфа {a}");
+        // оранжевый: красного больше, чем синего
+        assert!((outside >> 16) & 0xFF > outside & 0xFF);
+        assert_eq!(px(200, 160), 0, "окно не должно затемняться");
+        // без дымки (снег) экран прозрачен
+        let mut snow = Sim::new(1);
+        snow.w = 400.0;
+        snow.h = 300.0;
+        let mut clear = Canvas::new();
+        clear.draw(&snow, &sky(SkyMode::Off), 1.0);
+        assert_eq!(clear.pixels[20 * clear.width + 20], 0);
     }
 
     #[test]

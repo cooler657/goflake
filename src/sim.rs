@@ -313,6 +313,13 @@ impl Sim {
         true
     }
 
+    /// Дымка на весь экран: цвет и текущая прозрачность. Прозрачность медленно
+    /// «дышит». У материалов без дымки прозрачность нулевая.
+    pub fn haze(&self) -> [f32; 4] {
+        let [r, g, b, a] = self.kind.material().haze;
+        [r, g, b, a * (0.75 + 0.25 * (self.t * 0.45).sin())]
+    }
+
     /// Рамки всех окон на экране в координатах симуляции. Небо вырезает по ним
     /// свою картинку, чтобы оно было «за» окнами.
     pub fn window_rects(&self) -> &[Rect] {
@@ -387,9 +394,16 @@ impl Sim {
             let size = 1.0 + 2.2 * u * u; // размер в «снежинках»: от 1 до 3.2
             let r = size * mat.scale;
             let layer = if size < 1.5 { 0 } else if size < 2.2 { 1 } else { 2 };
+            // при сильном боковом ветре часть частиц рождается у наветренного края
+            let side = mat.side_spawn > 0.0 && rng.range(0.0, 1.0) < mat.side_spawn;
+            let (sx, sy) = if side {
+                (if mat.wind_bias >= 0.0 { -60.0 } else { w + 60.0 }, rng.range(0.0, h))
+            } else {
+                (rng.range(-60.0, w + 60.0), -8.0)
+            };
             particles.push(Particle {
-                x: rng.range(-60.0, w + 60.0),
-                y: -8.0,
+                x: sx,
+                y: sy,
                 vx: 0.0,
                 vy: (mat.fall_base + mat.fall_size * size) * 0.7,
                 r,
@@ -459,9 +473,9 @@ impl Sim {
             let k = if p.debris { m.debris_drag } else { m.drag };
             let swing = (t * m.sway_freq + p.phase).sin();
             let tx = if p.debris {
-                wind * 0.3 * m.wind + m.debris_sway * swing
+                (wind + m.wind_bias) * 0.3 * m.wind + m.debris_sway * swing
             } else {
-                wind * m.wind * (0.5 + size * 0.25) + m.sway * swing
+                (wind + m.wind_bias) * m.wind * (0.5 + size * 0.25) + m.sway * swing
             };
 
             // вихрь от курсора
@@ -739,6 +753,43 @@ mod tests {
                 assert!(surf.h.iter().all(|h| h.is_finite() && *h >= 0.0 && *h < max_pile * 3.0), "{kind:?}");
             }
             assert!(s.particles.iter().all(|p| p.x.is_finite() && p.y.is_finite()), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn dust_storm_blows_sideways_and_fills_the_whole_screen() {
+        let mut s = sim();
+        s.set_kind(Kind::Dust);
+        for _ in 0..(60 * 12) {
+            s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+        }
+        let n = s.particles.len() as f32;
+        assert!(n > 300.0, "бури нет: {n} частиц");
+        let mean_vx = s.particles.iter().map(|p| p.vx).sum::<f32>() / n;
+        assert!(mean_vx > 80.0, "ветер слабый или не вправо: {mean_vx}");
+        // пыль залетает сбоку, поэтому и внизу слева она есть
+        let low_left = s.particles.iter().filter(|p| p.x < s.w * 0.4 && p.y > s.h * 0.6).count();
+        assert!(low_left > 5, "нижний левый угол пуст: {low_left}");
+        // у обычного снега порывов в одну сторону нет
+        let mut snow = sim();
+        for _ in 0..(60 * 12) {
+            snow.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+        }
+        let sn = snow.particles.len().max(1) as f32;
+        assert!((snow.particles.iter().map(|p| p.vx).sum::<f32>() / sn).abs() < 60.0);
+    }
+
+    #[test]
+    fn haze_exists_only_for_the_dust_storm() {
+        let mut s = sim();
+        assert_eq!(s.haze()[3], 0.0);
+        s.set_kind(Kind::Dust);
+        let a = s.haze()[3];
+        assert!(a > 0.1 && a <= 0.18, "{a}");
+        for _ in 0..(60 * 5) {
+            s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+            let a = s.haze()[3];
+            assert!((0.13..=0.181).contains(&a), "дымка вышла за границы: {a}");
         }
     }
 

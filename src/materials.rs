@@ -4,16 +4,19 @@
 //! таблице. Размеры заданы относительно снежинки: `scale` = 1 — это снег,
 //! песчинка втрое мельче, лист в два с половиной раза крупнее.
 
-/// Вид осадков. Порядок — по временам года, начиная с зимы.
+/// Вид осадков. Первые четыре — по временам года, начиная с зимы; пыльная буря
+/// по календарю не выбирается, только вручную.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Snow,
     Rain,
     Sand,
     Leaves,
+    /// Марсианская пыльная буря.
+    Dust,
 }
 
-pub const KINDS: [Kind; 4] = [Kind::Snow, Kind::Rain, Kind::Sand, Kind::Leaves];
+pub const KINDS: [Kind; 5] = [Kind::Snow, Kind::Rain, Kind::Sand, Kind::Leaves, Kind::Dust];
 
 /// Форма частицы при отрисовке.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +58,17 @@ pub struct Material {
     pub flutter: f32,
     /// Наибольшая скорость вращения, радиан в секунду.
     pub spin: f32,
+    /// Для штрихов: на сколько точек штрих удлиняется на каждую точку в секунду
+    /// скорости. Чем больше, тем длиннее и «быстрее» выглядит штрих.
+    pub streak: f32,
+    /// Постоянный снос в одну сторону, точек в секунду до умножения на `wind`.
+    /// У обычных материалов 0 — ветер просто качается туда-сюда; у бури он
+    /// почти всегда дует вправо, порывами.
+    pub wind_bias: f32,
+    /// Доля частиц, которые рождаются не сверху, а у наветренного края экрана
+    /// на любой высоте. Нужна при сильном боковом ветре: иначе нижняя часть
+    /// экрана со стороны ветра остаётся пустой.
+    pub side_spawn: f32,
 
     // ---- комки, сбитые с кучи ----
     pub debris_fall: f32,
@@ -90,6 +104,9 @@ pub struct Material {
     pub pile_shadow: f32,
     /// Пёстрая неровная куча (опавшие листья) вместо гладкой.
     pub pile_mottled: bool,
+    /// Дымка на весь экран: цвет и наибольшая прозрачность (0 — дымки нет).
+    /// Прозрачность медленно «дышит». Окна не затемняются: дымка за ними.
+    pub haze: [f32; 4],
 }
 
 const SNOW: Material = Material {
@@ -124,6 +141,10 @@ const SNOW: Material = Material {
     pile_base: [0.84, 0.90, 1.0, 1.0],
     pile_shadow: 0.28,
     pile_mottled: false,
+    wind_bias: 0.0,
+    streak: 0.0,
+    side_spawn: 0.0,
+    haze: [0.0; 4],
 };
 
 /// Капли быстрые и тонкие; вода растекается ровным слоем, стекает с краёв и высыхает.
@@ -159,6 +180,10 @@ const RAIN: Material = Material {
     pile_base: [0.50, 0.70, 0.96, 0.62],
     pile_shadow: 0.0,
     pile_mottled: false,
+    wind_bias: 0.0,
+    streak: 0.007,
+    side_spawn: 0.0,
+    haze: [0.0; 4],
 };
 
 /// Песчинки мелкие и тяжёлые, их сильно несёт ветром; куча держит крутой склон.
@@ -194,6 +219,10 @@ const SAND: Material = Material {
     pile_base: [0.80, 0.64, 0.40, 1.0],
     pile_shadow: 0.25,
     pile_mottled: false,
+    wind_bias: 0.0,
+    streak: 0.0,
+    side_spawn: 0.0,
+    haze: [0.0; 4],
 };
 
 /// Листья крупные и лёгкие: падают медленно, порхают и кружатся, лежат рыхлым слоем.
@@ -235,6 +264,51 @@ const LEAVES: Material = Material {
     pile_base: [0.62, 0.34, 0.12, 1.0],
     pile_shadow: 0.25,
     pile_mottled: true,
+    wind_bias: 0.0,
+    streak: 0.0,
+    side_spawn: 0.0,
+    haze: [0.0; 4],
+};
+
+/// Пыль Марса: мелкая, быстрая и всегда боком. Ветер почти постоянный и порывистый,
+/// пыль летит горизонтальными штрихами и залетает с левого края на любой высоте.
+/// Оседает тонким рыжим слоем, дымка красит весь рабочий стол в оранжевый.
+const DUST: Material = Material {
+    label: "Пыльная буря (Марс)",
+    scale: 0.55,
+    density: 2.5,
+    rate: 9.0,
+    land_share: 0.7,
+    fall_base: 22.0,
+    fall_size: 14.0,
+    drag: 2.5,
+    wind: 5.0,
+    sway: 45.0,
+    sway_freq: 2.6,
+    flutter: 0.0,
+    spin: 0.0,
+    debris_fall: 300.0,
+    debris_drag: 2.0,
+    debris_sway: 25.0,
+    chunk: 1.5,
+    max_chunks: 5,
+    splash: false,
+    slope: 0.8,
+    relax_passes: 3,
+    max_pile: 10.0,
+    edge_keep: 0.8,
+    evaporate: 0.0,
+    shape: Shape::Streak,
+    colors: &[[0.88, 0.48, 0.26], [0.80, 0.40, 0.22], [0.93, 0.58, 0.34], [0.72, 0.34, 0.20]],
+    alpha: 0.85,
+    pile_top: [0.84, 0.44, 0.24, 1.0],
+    pile_base: [0.56, 0.26, 0.15, 1.0],
+    pile_shadow: 0.2,
+    pile_mottled: false,
+    wind_bias: 45.0,
+    streak: 0.035,
+    side_spawn: 0.7,
+    haze: [0.85, 0.42, 0.22, 0.18],
 };
 
 impl Kind {
@@ -244,6 +318,7 @@ impl Kind {
             Kind::Rain => &RAIN,
             Kind::Sand => &SAND,
             Kind::Leaves => &LEAVES,
+            Kind::Dust => &DUST,
         }
     }
 
@@ -300,6 +375,8 @@ mod tests {
         assert_eq!(Kind::for_month(7), Kind::Sand);
         assert_eq!(Kind::for_month(10), Kind::Leaves);
         assert_eq!(Kind::for_month(12), Kind::Snow);
+        // пыльная буря по календарю не выбирается ни в одном месяце
+        assert!((1..=12).all(|m| Kind::for_month(m) != Kind::Dust));
     }
 
     #[test]
@@ -308,6 +385,8 @@ mod tests {
         assert!(s(Kind::Sand) < s(Kind::Rain));
         assert!(s(Kind::Rain) < s(Kind::Snow));
         assert!(s(Kind::Snow) < s(Kind::Leaves));
+        // пыль бури крупнее песчинки, но мельче капли
+        assert!(s(Kind::Sand) < s(Kind::Dust) && s(Kind::Dust) < s(Kind::Rain));
         assert_eq!(s(Kind::Snow), 1.0);
     }
 }

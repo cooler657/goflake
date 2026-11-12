@@ -145,7 +145,7 @@ mod tests {
         );
         assert_eq!(
             Settings::parse("rate=99\nчто-то\nscene=99\nsky=99\nsky_place=99\nsolid=0"),
-            Settings { rate: 2, scene: 4, sky: 3, sky_place: 2, solid: false, gpu: true }
+            Settings { rate: 2, scene: 5, sky: 3, sky_place: 2, solid: false, gpu: true }
         );
         assert_eq!(Settings::parse(""), Settings::default());
     }
@@ -157,6 +157,7 @@ mod tests {
         assert_eq!(s(2), Kind::Rain);
         assert_eq!(s(3), Kind::Sand);
         assert_eq!(s(4), Kind::Leaves);
+        assert_eq!(s(5), Kind::Dust);
         assert_eq!(s(0), Kind::for_today());
         assert_eq!(scene_label(0), SCENE_AUTO);
         assert_eq!(scene_label(4), Kind::Leaves.material().label);
