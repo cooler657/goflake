@@ -397,16 +397,12 @@ impl SoftSurface {
         // SAFETY: слой и вид живы, пока жив `self`; все созданные объекты
         // CoreFoundation освобождаются; данные картинки копируются в CFData.
         unsafe {
-            // Вид winit перевёрнут по вертикали; если из-за этого слой показывает
-            // картинку вверх ногами, отдаём строки в обратном порядке.
-            let flipped: bool = msg_send![&*self.layer, contentsAreFlipped];
+            // Строки идут сверху вниз, как есть. Слой сообщает contentsAreFlipped,
+            // но картинку-содержимое система показывает правильно сама: переворачивать
+            // строки нельзя — осадки пойдут снизу вверх.
+            // На Mac порядок байтов младший-первый: u32 0xAARRGGBB — это уже B, G, R, A.
             self.bytes.clear();
-            self.bytes.reserve(w * h * 4);
-            for row in 0..h {
-                let src = if flipped { h - 1 - row } else { row };
-                // на Mac порядок байтов младший-первый: u32 0xAARRGGBB — это уже B, G, R, A
-                self.bytes.extend_from_slice(bytemuck::cast_slice(&self.canvas.pixels[src * w..(src + 1) * w]));
-            }
+            self.bytes.extend_from_slice(bytemuck::cast_slice(&self.canvas.pixels[..w * h]));
             let data = CFDataCreate(null(), self.bytes.as_ptr(), self.bytes.len() as isize);
             let provider = CGDataProviderCreateWithCFData(data);
             let image =

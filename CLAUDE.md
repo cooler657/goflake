@@ -98,7 +98,9 @@ open dist/Snowdrift.app                               # запустить
 - **Программный режим на macOS** — это `soft::Canvas` плюс
   `platform::SoftSurface` (картинка в `CALayer`), а не wgpu: у Metal нет
   программного адаптера. В Windows и Linux программный режим — wgpu с
-  `force_fallback_adapter`.
+  `force_fallback_adapter`. Строки растра отдаются слою сверху вниз без
+  переворота, хотя слой и сообщает `contentsAreFlipped`: переворот уже
+  пробовали, осадки шли снизу вверх.
 - **API библиотек.** wgpu, winit, tray-icon меняют API между версиями. Перед
   правкой сверяться с исходниками в `~/.cargo/registry/src/`, а не писать по
   памяти.
