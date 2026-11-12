@@ -22,5 +22,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-codesign --force -s - "$APP"
+# Подпись «ad hoc» по умолчанию привязывает приложение к хэшу сборки, и разрешение в
+# Универсальном доступе слетает после каждой пересборки. Явное требование «по
+# идентификатору» этого не допускает: система узнаёт приложение по bundle id.
+codesign --force -s - --requirements '=designated => identifier "local.snowdrift"' "$APP"
 echo "Готово: $(pwd)/$APP"

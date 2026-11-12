@@ -287,10 +287,14 @@ impl Platform {
         Some(unsafe { AXIsProcessTrusted() } != 0)
     }
 
-    /// Показывает системный запрос на «Универсальный доступ».
+    /// Показывает системный запрос на «Универсальный доступ». Если доступ уже есть,
+    /// ничего не делает, чтобы не показывать запрос снова.
     pub fn request_dock_access(&self) {
         // SAFETY: словарь создаётся из статических ключей и освобождается здесь же.
         unsafe {
+            if AXIsProcessTrusted() != 0 {
+                return;
+            }
             let keys = [kAXTrustedCheckOptionPrompt];
             let values = [kCFBooleanTrue];
             let opts = CFDictionaryCreate(
