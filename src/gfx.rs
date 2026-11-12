@@ -45,6 +45,16 @@ impl Gfx {
         }
     }
 
+    /// Рисует полностью прозрачный кадр: экран на паузе, но окно остаётся на месте и
+    /// не отнимает фокус, как отнял бы показ скрытого окна.
+    pub fn clear(&mut self) {
+        match self {
+            Gfx::Gpu(r) => r.clear(),
+            #[cfg(target_os = "macos")]
+            Gfx::Soft(s) => s.clear(),
+        }
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         match self {
             Gfx::Gpu(r) => r.resize(width, height),

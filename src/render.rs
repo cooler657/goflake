@@ -365,6 +365,35 @@ impl Renderer {
         });
     }
 
+    /// Очищает окно до полной прозрачности.
+    pub fn clear(&mut self) {
+        use wgpu::CurrentSurfaceTexture as T;
+        let frame = match self.surface.get_current_texture() {
+            T::Success(f) | T::Suboptimal(f) => f,
+            _ => return,
+        };
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let w = if self.premul { 0.0 } else { 1.0 };
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: w, g: w, b: w, a: 0.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
+        self.queue.submit([encoder.finish()]);
+        self.queue.present(frame);
+    }
+
     /// Рисует кадр. Возвращает `false`, если кадр получить не удалось (окно скрыто и т. п.).
     pub fn render(&mut self, sim: &Sim, sky: &Sky, scale: f32) -> bool {
         use wgpu::CurrentSurfaceTexture as T;

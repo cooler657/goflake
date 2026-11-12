@@ -157,6 +157,8 @@ pub struct Sim {
     pub rate: f32,
     /// Окна непроницаемы: снег не идёт поверх их содержимого.
     pub solid: bool,
+    /// Во сколько раз меньше частиц рождается (режим энергосбережения облегчает осадки).
+    pub rate_scale: f32,
     /// Куда дует ветер и во сколько раз он сильнее обычного.
     pub wind_dir: WindDir,
     pub wind_force: f32,
@@ -239,6 +241,7 @@ impl Sim {
             kind: Kind::Snow,
             rate: 40.0,
             solid: false,
+            rate_scale: 1.0,
             wind_dir: WindDir::Auto,
             wind_force: 1.0,
             decor: true,
@@ -417,7 +420,7 @@ impl Sim {
         } else if !self.heaps.is_empty() {
             self.drop_all_heaps(true);
         }
-        let Sim { w, h, particles, surfaces, kind, rate, solid, wind_dir, wind_force, decor: _, gather: _, heaps: _, solids, t, spawn_acc, rng } = self;
+        let Sim { w, h, particles, surfaces, kind, rate, rate_scale, solid, wind_dir, wind_force, decor: _, gather: _, heaps: _, solids, t, spawn_acc, rng } = self;
         let (w, h, solid, kind, wind_dir, force) = (*w, *h, *solid, *kind, *wind_dir, *wind_force);
         // материал, который падает сейчас и из которого состоят кучи
         let mat = kind.material();
@@ -446,7 +449,7 @@ impl Sim {
         };
 
         // новые частицы
-        *spawn_acc += *rate * mat.rate * dt * w / 1000.0;
+        *spawn_acc += *rate * *rate_scale * mat.rate * dt * w / 1000.0;
         while *spawn_acc >= 1.0 {
             *spawn_acc -= 1.0;
             if particles.len() >= MAX_PARTICLES {
@@ -885,6 +888,20 @@ mod tests {
         assert!(mean_vx(Kind::Dust, WindDir::Calm, 1.0).abs() < 20.0);
         // ураган сильнее обычной бури
         assert!(mean_vx(Kind::Dust, WindDir::Right, 2.0) > mean_vx(Kind::Dust, WindDir::Right, 1.0) * 1.4);
+    }
+
+    #[test]
+    fn power_saving_makes_the_precipitation_lighter() {
+        let count = |scale: f32| {
+            let mut s = sim();
+            s.rate_scale = scale;
+            for _ in 0..(60 * 10) {
+                s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+            }
+            s.particles.len() as f32
+        };
+        let (full, light) = (count(1.0), count(0.4));
+        assert!(light < full * 0.55 && light > full * 0.25, "{light} против {full}");
     }
 
     #[test]

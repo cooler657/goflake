@@ -284,6 +284,25 @@ impl Platform {
         }
     }
 
+    /// Режим энергосбережения («Малое энергопотребление»).
+    pub fn low_power(&mut self) -> bool {
+        use objc2::runtime::Bool;
+        // SAFETY: `NSProcessInfo.processInfo` — синглтон; `isLowPowerModeEnabled` возвращает BOOL.
+        unsafe {
+            let info: *mut AnyObject = msg_send![class!(NSProcessInfo), processInfo];
+            if info.is_null() {
+                return false;
+            }
+            let on: Bool = msg_send![info, isLowPowerModeEnabled];
+            on.as_bool()
+        }
+    }
+
+    /// На macOS полноэкранное окно находится по списку окон.
+    pub fn fullscreen_app(&mut self) -> bool {
+        false
+    }
+
     pub fn dock_access(&self) -> Option<bool> {
         // SAFETY: функция без аргументов и побочных эффектов.
         Some(unsafe { AXIsProcessTrusted() } != 0)
@@ -394,6 +413,17 @@ impl SoftSurface {
                 bytes: Vec::new(),
                 last_frame: Instant::now(),
             })
+        }
+    }
+
+    /// Убирает картинку: окно прозрачное.
+    pub fn clear(&mut self) {
+        // SAFETY: слой жив, пока жив `self`; `setContents:nil` снимает картинку.
+        unsafe {
+            let _: () = msg_send![class!(CATransaction), begin];
+            let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+            let _: () = msg_send![&*self.layer, setContents: null::<AnyObject>()];
+            let _: () = msg_send![class!(CATransaction), commit];
         }
     }
 

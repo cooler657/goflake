@@ -152,6 +152,16 @@ impl Platform {
         self.panel
     }
 
+    /// Профиль питания «экономия» (power-saver), если ядро его сообщает.
+    pub fn low_power(&mut self) -> bool {
+        std::fs::read_to_string("/sys/firmware/acpi/platform_profile").is_ok_and(|s| s.trim() == "low-power")
+    }
+
+    /// В X11 полноэкранное окно находится по списку окон.
+    pub fn fullscreen_app(&mut self) -> bool {
+        false
+    }
+
     pub fn dock_access(&self) -> Option<bool> {
         None
     }

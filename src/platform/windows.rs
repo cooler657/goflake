@@ -113,6 +113,26 @@ impl Platform {
         Some([r.left as f32, r.top as f32, (r.right - r.left) as f32, (r.bottom - r.top) as f32])
     }
 
+    /// Включена ли экономия заряда батареи.
+    pub fn low_power(&mut self) -> bool {
+        use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+        // SAFETY: функция пишет только в переданную структуру.
+        unsafe {
+            let mut st: SYSTEM_POWER_STATUS = std::mem::zeroed();
+            GetSystemPowerStatus(&mut st) != 0 && st.SystemStatusFlag == 1
+        }
+    }
+
+    /// Идёт ли полноэкранное приложение или презентация (системное определение).
+    pub fn fullscreen_app(&mut self) -> bool {
+        use windows_sys::Win32::UI::Shell::SHQueryUserNotificationState;
+        let mut state = 0;
+        // SAFETY: функция пишет только в переданную переменную.
+        let hr = unsafe { SHQueryUserNotificationState(&mut state) };
+        // 2 — занят полноэкранным приложением, 3 — полноэкранный Direct3D, 4 — презентация
+        hr == 0 && matches!(state, 2..=4)
+    }
+
     pub fn dock_access(&self) -> Option<bool> {
         None
     }
