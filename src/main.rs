@@ -44,6 +44,8 @@ const POLL_SLOW: f32 = 2.0;
 const POLL_PAUSED: f32 = 0.5;
 /// Во сколько раз меньше осадков в режиме энергосбережения.
 const POWER_SAVING_RATE: f32 = 0.4;
+/// Как часто цикл просыпается проверить, не оборвалась ли перерисовка.
+const HEARTBEAT: Duration = Duration::from_millis(250);
 /// Пауза между кадрами в режиме энергосбережения (около 30 кадров в секунду).
 const POWER_SAVING_FRAME: Duration = Duration::from_millis(33);
 
@@ -445,9 +447,15 @@ impl ApplicationHandler<Cmd> for App {
                     soonest(t);
                 }
             }
+            // цепочка перерисовок могла оборваться (например, из-за меню в трее) — запускаем заново
+            if screen::needs_kick(s.paused, s.next_frame, s.last_frame, now) {
+                s.window.request_redraw();
+            }
         }
         if self.screens.iter().all(|s| s.paused) {
             soonest(now + Duration::from_secs_f32(POLL_PAUSED));
+        } else {
+            soonest(now + HEARTBEAT);
         }
         el.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }

@@ -126,6 +126,21 @@ impl Platform {
     /// Идёт ли полноэкранное приложение или презентация (системное определение).
     pub fn fullscreen_app(&mut self) -> bool {
         use windows_sys::Win32::UI::Shell::SHQueryUserNotificationState;
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        // SAFETY: функции только читают состояние; `pid` — локальная переменная.
+        unsafe {
+            // Если на переднем плане наше приложение (например, открыто меню в трее),
+            // система может принять наше же окно на весь экран за полноэкранное
+            // приложение и поставить всё на паузу. Такой ответ не учитываем.
+            let fg = GetForegroundWindow();
+            if !fg.is_null() {
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(fg, &mut pid);
+                if pid == self.pid {
+                    return false;
+                }
+            }
+        }
         let mut state = 0;
         // SAFETY: функция пишет только в переданную переменную.
         let hr = unsafe { SHQueryUserNotificationState(&mut state) };

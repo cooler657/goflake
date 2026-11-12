@@ -46,6 +46,20 @@ pub fn monitors(el: &ActiveEventLoop) -> Vec<MonitorInfo> {
     }
 }
 
+/// Сколько экран может не рисовать, прежде чем цепочку перерисовок сочтут оборвавшейся.
+pub const STALL: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Оборвалась ли цепочка перерисовок: экран не на паузе, следующий кадр не отложен
+/// на таймер, а последний был давно (или ещё не было). Так бывает, пока открыто
+/// меню в трее: система крутит свой цикл сообщений, и очередной запрос перерисовки
+/// может потеряться. Тогда его нужно сделать заново.
+pub fn needs_kick(paused: bool, next_frame: Option<Instant>, last_frame: Option<Instant>, now: Instant) -> bool {
+    if paused || next_frame.is_some() {
+        return false;
+    }
+    last_frame.is_none_or(|t| now.duration_since(t) > STALL)
+}
+
 /// Окно размером с монитор — полноэкранное приложение, игра или видео.
 pub fn is_fullscreen(window: [f32; 4], monitor: [f32; 4]) -> bool {
     window.iter().zip(monitor.iter()).all(|(a, b)| (a - b).abs() <= 3.0)
@@ -173,6 +187,21 @@ impl Screen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stalled_redraw_chain_is_noticed_and_a_healthy_one_is_left_alone() {
+        let now = Instant::now();
+        let ago = |ms: u64| Some(now - std::time::Duration::from_millis(ms));
+        // кадры идут — ничего не трогаем
+        assert!(!needs_kick(false, None, ago(16), now));
+        // кадров давно нет, а экран не на паузе — перезапускаем
+        assert!(needs_kick(false, None, ago(600), now));
+        // кадров ещё не было совсем (после включения) — запускаем
+        assert!(needs_kick(false, None, None, now));
+        // на паузе и при отложенном кадре (энергосбережение) цепочку не трогаем
+        assert!(!needs_kick(true, None, ago(5000), now));
+        assert!(!needs_kick(false, Some(now + std::time::Duration::from_millis(20)), ago(5000), now));
+    }
 
     #[test]
     fn a_window_the_size_of_the_monitor_is_fullscreen() {
