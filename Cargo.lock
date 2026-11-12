@@ -2246,6 +2246,7 @@ dependencies = [
  "bytemuck",
  "dirs",
  "ksni",
+ "libc",
  "objc2 0.6.5",
  "pollster",
  "tray-icon",

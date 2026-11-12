@@ -18,6 +18,7 @@ use winit::window::{Window, WindowAttributes};
 
 use super::RawWindow;
 use crate::sim::Sim;
+use crate::sky::Sky;
 use crate::soft::Canvas;
 
 pub const PHYSICAL: bool = false;
@@ -391,8 +392,8 @@ impl SoftSurface {
     }
 
     /// Рисует и показывает кадр, затем выдерживает паузу до следующего.
-    pub fn render(&mut self, sim: &Sim) -> bool {
-        self.canvas.draw(sim, 1.0);
+    pub fn render(&mut self, sim: &Sim, sky: &Sky) -> bool {
+        self.canvas.draw(sim, sky, 1.0);
         let (w, h) = (self.canvas.width, self.canvas.height);
         // SAFETY: слой и вид живы, пока жив `self`; все созданные объекты
         // CoreFoundation освобождаются; данные картинки копируются в CFData.

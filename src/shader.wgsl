@@ -1,4 +1,4 @@
-// Частицы — инстансированные квадраты; форма (крупинка, штрих, лист) считается
+// Частицы и небо — инстансированные квадраты; форма (крупинка, штрих, лист, свечение, луна) считается
 // и сглаживается во фрагментном шейдере. Кучи — треугольники с цветом в вершинах.
 
 struct Globals {
@@ -20,14 +20,15 @@ fn out_color(rgb: vec3f, a: f32) -> vec4f {
     return vec4f(rgb, a);
 }
 
-// ---- частицы ----
+// ---- частицы и небо ----
 
 struct FlakeOut {
     @builtin(position) pos: vec4f,
-    @location(0) local: vec2f,    // точка в осях частицы, физические пиксели
+    @location(0) local: vec2f,    // точка в осях фигуры, физические пиксели
     @location(1) half: vec2f,     // полуразмеры в физических пикселях
-    @location(2) shape: f32,      // 0 — крупинка или штрих, 1 — лист
+    @location(2) shape: f32,      // 0 — крупинка или штрих, 1 — лист, 2 — свечение, 3 — луна
     @location(3) color: vec4f,
+    @location(4) param: f32,      // фаза луны
 }
 
 @vertex
@@ -35,7 +36,7 @@ fn vs_flake(
     @builtin(vertex_index) vi: u32,
     @location(0) center: vec2f,
     @location(1) half: vec2f,
-    @location(2) rot_shape: vec2f,
+    @location(2) rot_shape: vec3f,   // поворот, вид фигуры, параметр
     @location(3) color: vec4f,
 ) -> FlakeOut {
     var corners = array<vec2f, 6>(
@@ -50,6 +51,7 @@ fn vs_flake(
     out.local = d * g.scale;
     out.half = half * g.scale;
     out.shape = rot_shape.y;
+    out.param = rot_shape.z;
     out.color = color;
     return out;
 }
@@ -64,7 +66,7 @@ fn fs_flake(in: FlakeOut) -> @location(0) vec4f {
         // капсула: при a == b это круг, при a > b — штрих со скруглёнными концами
         let q = vec2f(max(abs(in.local.x) - (a - b), 0.0), in.local.y);
         cover = clamp(b - length(q) + 0.5, 0.0, 1.0);
-    } else {
+    } else if in.shape < 1.5 {
         // лист: линза с острыми концами и тёмной прожилкой посередине
         let t = clamp(in.local.x / a, -1.0, 1.0);
         let f = b * (1.0 - t * t) - abs(in.local.y);
@@ -72,6 +74,23 @@ fn fs_flake(in: FlakeOut) -> @location(0) vec4f {
         let grad = sqrt(1.0 + k * k);
         cover = clamp(f / grad + 0.5, 0.0, 1.0);
         rgb *= mix(0.72, 1.0, smoothstep(0.3, 1.3, abs(in.local.y)));
+    } else if in.shape < 2.5 {
+        // свечение: яркость падает от центра к краю по квадрату
+        let gl = clamp(1.0 - length(in.local) / a, 0.0, 1.0);
+        cover = gl * gl;
+    } else {
+        // луна: диск, освещённый до терминатора (половины эллипса)
+        let disk = clamp(a - length(in.local) + 0.5, 0.0, 1.0);
+        let v = clamp(in.local.y / a, -1.0, 1.0);
+        let w = sqrt(max(1.0 - v * v, 0.0));
+        let c = cos(6.2831853 * in.param);
+        var edge: f32;
+        if in.param < 0.5 {
+            edge = in.local.x - c * w * a;
+        } else {
+            edge = -c * w * a - in.local.x;
+        }
+        cover = disk * clamp(edge + 0.5, 0.0, 1.0);
     }
     let alpha = in.color.a * cover;
     if alpha <= 0.002 {

@@ -267,7 +267,7 @@ impl Kind {
 }
 
 /// Месяц (1–12) по числу дней от 1 января 1970 года.
-fn month_of_day(days: i64) -> u32 {
+pub(crate) fn month_of_day(days: i64) -> u32 {
     // алгоритм civil_from_days (Говард Хиннант)
     let z = days + 719_468;
     let era = z.div_euclid(146_097);

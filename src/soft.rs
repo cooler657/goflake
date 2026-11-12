@@ -8,8 +8,9 @@
 // нужен только тестам.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
-use crate::look::{self, FEATHER_PX, SHADOW_PX, SHADOW_RGB};
+use crate::look::{self, FEATHER_PX, FlakeShape, SHADOW_PX, SHADOW_RGB};
 use crate::sim::Sim;
+use crate::sky::Sky;
 
 pub struct Canvas {
     pub width: usize,
@@ -49,10 +50,16 @@ impl Canvas {
     }
 
     /// Рисует кадр. `scale` — пикселей растра на логическую точку.
-    pub fn draw(&mut self, sim: &Sim, scale: f32) {
+    pub fn draw(&mut self, sim: &Sim, sky: &Sky, scale: f32) {
         let width = (sim.w * scale).ceil().max(1.0) as usize;
         let height = (sim.h * scale).ceil().max(1.0) as usize;
         self.reset(width, height);
+        // небо рисуется под частицами
+        let mut looks = Vec::new();
+        sky.looks(sim.w, sim.h, &mut looks);
+        for f in &looks {
+            self.flake(f, scale);
+        }
         for p in &sim.particles {
             self.flake(&look::flake(p), scale);
         }
@@ -78,11 +85,11 @@ impl Canvas {
                 // центр пикселя в осях частицы
                 let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
                 let (lx, ly) = (dx * cos + dy * sin, -dx * sin + dy * cos);
-                let cover = look::coverage(f.leaf, lx, ly, a, b);
+                let cover = look::coverage(f.shape, lx, ly, a, b);
                 if cover <= 0.0 {
                     continue;
                 }
-                let shade = if f.leaf { look::leaf_rib(ly) } else { 1.0 };
+                let shade = if f.shape == FlakeShape::Leaf { look::leaf_rib(ly) } else { 1.0 };
                 self.blend(x, y, [rgb[0] * shade, rgb[1] * shade, rgb[2] * shade], f.color[3] * cover);
             }
         }
@@ -131,7 +138,13 @@ impl Canvas {
 mod tests {
     use super::*;
     use crate::materials::KINDS;
+    use crate::clock::Clock;
     use crate::sim::{Rect, WindowInfo};
+    use crate::sky::SkyMode;
+
+    fn sky(mode: SkyMode) -> Sky {
+        Sky::new(mode, Clock { hour: 12.5, season: 5.5, unix: 0.0 })
+    }
 
     fn alpha_sum(c: &Canvas) -> u64 {
         c.pixels.iter().map(|p| (p >> 24) as u64).sum()
@@ -143,7 +156,7 @@ mod tests {
         sim.w = 320.0;
         sim.h = 200.0;
         let mut canvas = Canvas::new();
-        canvas.draw(&sim, 1.0);
+        canvas.draw(&sim, &sky(SkyMode::Off), 1.0);
         assert_eq!((canvas.width, canvas.height), (320, 200));
         assert_eq!(alpha_sum(&canvas), 0);
     }
@@ -162,7 +175,7 @@ mod tests {
                 sim.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
             }
             let mut canvas = Canvas::new();
-            canvas.draw(&sim, 1.0);
+            canvas.draw(&sim, &sky(SkyMode::Off), 1.0);
             assert!(alpha_sum(&canvas) > 1000, "{kind:?}: кадр пуст");
             // цвет умножен на альфу: ни один канал не превышает альфу
             for p in &canvas.pixels {
@@ -181,7 +194,63 @@ mod tests {
         sim.w = 100.0;
         sim.h = 50.0;
         let mut canvas = Canvas::new();
-        canvas.draw(&sim, 2.0);
+        canvas.draw(&sim, &sky(SkyMode::Off), 2.0);
         assert_eq!((canvas.width, canvas.height), (200, 100));
+    }
+
+    /// Сохраняет кадры, чтобы посмотреть на них глазами. Запуск:
+    /// `SNOWDRIFT_DUMP=/папка cargo test dump_preview -- --ignored`.
+    /// Каждый кадр — файл `имя.raw` (байты B, G, R, A, цвет умножен на альфу)
+    /// и `имя.txt` с шириной и высотой.
+    #[test]
+    #[ignore]
+    fn dump_preview() {
+        let Some(dir) = std::env::var_os("SNOWDRIFT_DUMP") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        let save = |name: &str, canvas: &Canvas| {
+            let bytes: Vec<u8> = canvas.pixels.iter().flat_map(|p| p.to_le_bytes()).collect();
+            std::fs::write(dir.join(format!("{name}.raw")), bytes).unwrap();
+            std::fs::write(dir.join(format!("{name}.txt")), format!("{} {}", canvas.width, canvas.height)).unwrap();
+        };
+        let at = |hour: f32, season: f32, phase: f32| Clock {
+            hour,
+            season,
+            unix: 947_182_440.0 + phase as f64 * 29.530_588_853 * 86_400.0,
+        };
+        // небо: полдень лета, закат лета, полная луна, растущий серп, убывающая луна
+        let scenes = [
+            ("sky_noon", SkyMode::Auto, at(12.5, 5.5, 0.5)),
+            ("sky_sunset", SkyMode::Auto, at(20.6, 5.5, 0.5)),
+            ("sky_full", SkyMode::Auto, at(23.0, 5.5, 0.5)),
+            ("sky_crescent", SkyMode::Auto, at(21.5, 5.5, 0.12)),
+            ("sky_waning", SkyMode::Auto, at(3.0, 5.5, 0.85)),
+            ("sky_newmoon", SkyMode::Moon, at(1.0, 5.5, 0.0)),
+        ];
+        for (name, mode, clock) in scenes {
+            let mut sim = Sim::new(1);
+            sim.w = 960.0;
+            sim.h = 540.0;
+            let mut sky = Sky::new(mode, clock);
+            sky.step(7.0);
+            let mut canvas = Canvas::new();
+            canvas.draw(&sim, &sky, 1.0);
+            save(name, &canvas);
+        }
+        // осадки: четыре вида на окне
+        for kind in KINDS {
+            let mut sim = Sim::new(9);
+            sim.w = 960.0;
+            sim.h = 540.0;
+            sim.rate = 110.0;
+            sim.set_kind(kind);
+            let win = [WindowInfo { id: 5, rect: Rect::new(160.0, 260.0, 640.0, 240.0) }];
+            for _ in 0..(60 * 30) {
+                sim.refresh(&win, None, 0.05);
+                sim.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+            }
+            let mut canvas = Canvas::new();
+            canvas.draw(&sim, &sky(SkyMode::Off), 1.0);
+            save(&format!("kind_{kind:?}").to_lowercase(), &canvas);
+        }
     }
 }

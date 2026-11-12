@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::materials::{KINDS, Kind};
+use crate::sky::{MODES, SkyMode};
 
 /// Интенсивности: название и число снежинок в секунду на 1000 точек ширины
 /// (для других материалов умножается на `Material::rate`).
@@ -13,6 +14,14 @@ pub const RATES: [(&str, f32); 3] = [("Слабо", 15.0), ("Умеренно", 
 pub const SCENE_AUTO: &str = "По времени года";
 /// Число вариантов в меню осадков: «по времени года» и по одному на материал.
 pub const SCENES: usize = KINDS.len() + 1;
+
+/// Число вариантов неба в меню.
+pub const SKIES: usize = MODES.len();
+
+/// Название варианта неба в меню.
+pub fn sky_label(sky: usize) -> &'static str {
+    MODES[sky.min(SKIES - 1)].label()
+}
 
 /// Название варианта в меню осадков.
 pub fn scene_label(scene: usize) -> &'static str {
@@ -25,6 +34,8 @@ pub struct Settings {
     pub rate: usize,
     /// Что падает: 0 — по времени года, дальше — номер материала в `KINDS` плюс один.
     pub scene: usize,
+    /// Что на небе: номер в `sky::MODES`.
+    pub sky: usize,
     /// Режим «не засыпать содержимое окон».
     pub solid: bool,
     /// Аппаратное ускорение: рисовать на видеокарте, а не программно.
@@ -33,7 +44,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { rate: 1, scene: 0, solid: false, gpu: true }
+        Self { rate: 1, scene: 0, sky: 1, solid: false, gpu: true }
     }
 }
 
@@ -57,6 +68,11 @@ impl Settings {
                         s.scene = i.min(SCENES - 1);
                     }
                 }
+                ("sky", v) => {
+                    if let Ok(i) = v.parse::<usize>() {
+                        s.sky = i.min(SKIES - 1);
+                    }
+                }
                 ("solid", v) => s.solid = v == "1" || v == "true",
                 ("gpu", v) => s.gpu = v != "0" && v != "false",
                 _ => {}
@@ -75,8 +91,13 @@ impl Settings {
             let _ = fs::create_dir_all(dir);
         }
         let text =
-            format!("rate={}\nscene={}\nsolid={}\ngpu={}\n", self.rate, self.scene, self.solid as u8, self.gpu as u8);
+            format!("rate={}\nscene={}\nsky={}\nsolid={}\ngpu={}\n", self.rate, self.scene, self.sky, self.solid as u8, self.gpu as u8);
         let _ = fs::write(p, text);
+    }
+
+    /// Что должно быть на небе.
+    pub fn sky_mode(&self) -> SkyMode {
+        MODES[self.sky.min(SKIES - 1)]
     }
 
     /// Материал, который должен падать сейчас.
@@ -92,12 +113,12 @@ mod tests {
     #[test]
     fn parses_and_ignores_garbage() {
         assert_eq!(
-            Settings::parse("rate=2\nscene=3\nsolid=1\ngpu=0\n"),
-            Settings { rate: 2, scene: 3, solid: true, gpu: false }
+            Settings::parse("rate=2\nscene=3\nsky=2\nsolid=1\ngpu=0\n"),
+            Settings { rate: 2, scene: 3, sky: 2, solid: true, gpu: false }
         );
         assert_eq!(
-            Settings::parse("rate=99\nчто-то\nscene=99\nsolid=0"),
-            Settings { rate: 2, scene: 4, solid: false, gpu: true }
+            Settings::parse("rate=99\nчто-то\nscene=99\nsky=99\nsolid=0"),
+            Settings { rate: 2, scene: 4, sky: 3, solid: false, gpu: true }
         );
         assert_eq!(Settings::parse(""), Settings::default());
     }
@@ -112,5 +133,10 @@ mod tests {
         assert_eq!(s(0), Kind::for_today());
         assert_eq!(scene_label(0), SCENE_AUTO);
         assert_eq!(scene_label(4), Kind::Leaves.material().label);
+        let sky = |sky| Settings { sky, ..Settings::default() }.sky_mode();
+        assert_eq!(sky(0), SkyMode::Off);
+        assert_eq!(sky(1), SkyMode::Auto);
+        assert_eq!(sky(3), SkyMode::Moon);
+        assert_eq!(sky_label(1), SkyMode::Auto.label());
     }
 }

@@ -6,7 +6,7 @@
 
 use winit::event_loop::EventLoopProxy;
 
-use crate::settings::{RATES, SCENES, scene_label};
+use crate::settings::{RATES, SCENES, SKIES, scene_label, sky_label};
 
 /// Команда из меню. Она же — пользовательское событие цикла событий.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -14,6 +14,8 @@ pub enum Cmd {
     Toggle,
     /// Что падает: 0 — по времени года, дальше материалы.
     Scene(usize),
+    /// Что на небе: номер в `sky::MODES`.
+    Sky(usize),
     Rate(usize),
     Solid,
     Shake,
@@ -30,6 +32,7 @@ pub enum Cmd {
 pub struct MenuState {
     pub running: bool,
     pub scene: usize,
+    pub sky: usize,
     pub rate: usize,
     pub solid: bool,
     /// `None` — пункта про Dock нет (разрешение не требуется).
@@ -96,6 +99,7 @@ mod imp {
         _icon: TrayIcon,
         running: CheckMenuItem,
         scenes: Vec<CheckMenuItem>,
+        skies: Vec<CheckMenuItem>,
         rates: Vec<CheckMenuItem>,
         solid: CheckMenuItem,
         dock: Option<CheckMenuItem>,
@@ -111,10 +115,15 @@ mod imp {
             "gpu" => Cmd::Gpu,
             "dock" => Cmd::Dock,
             "quit" => Cmd::Quit,
-            _ => match id.strip_prefix("scene") {
-                Some(i) => Cmd::Scene(i.parse().ok()?),
-                None => Cmd::Rate(id.strip_prefix("rate")?.parse().ok()?),
-            },
+            _ => {
+                if let Some(i) = id.strip_prefix("scene") {
+                    Cmd::Scene(i.parse().ok()?)
+                } else if let Some(i) = id.strip_prefix("sky") {
+                    Cmd::Sky(i.parse().ok()?)
+                } else {
+                    Cmd::Rate(id.strip_prefix("rate")?.parse().ok()?)
+                }
+            }
         })
     }
 
@@ -133,6 +142,13 @@ mod imp {
                 let item = CheckMenuItem::with_id(format!("scene{i}"), scene_label(i), true, state.scene == i, None);
                 menu.append(&item).map_err(err)?;
                 scenes.push(item);
+            }
+            menu.append(&sep()).map_err(err)?;
+            let mut skies = Vec::new();
+            for i in 0..SKIES {
+                let item = CheckMenuItem::with_id(format!("sky{i}"), sky_label(i), true, state.sky == i, None);
+                menu.append(&item).map_err(err)?;
+                skies.push(item);
             }
             menu.append(&sep()).map_err(err)?;
             let mut rates = Vec::new();
@@ -178,7 +194,7 @@ mod imp {
             let builder = builder.with_icon(icon([205, 230, 255])?);
             let tray = builder.build().map_err(|e| e.to_string())?;
 
-            Ok(Self { _icon: tray, running, scenes, rates, solid, dock, gpu, adapter })
+            Ok(Self { _icon: tray, running, scenes, skies, rates, solid, dock, gpu, adapter })
         }
 
         /// Приводит галочки в соответствие с состоянием приложения.
@@ -189,6 +205,9 @@ mod imp {
             self.running.set_checked(state.running);
             for (i, item) in self.scenes.iter().enumerate() {
                 item.set_checked(state.scene == i);
+            }
+            for (i, item) in self.skies.iter().enumerate() {
+                item.set_checked(state.sky == i);
             }
             for (i, item) in self.rates.iter().enumerate() {
                 item.set_checked(state.rate == i);
@@ -255,6 +274,15 @@ mod imp {
                     select: Box::new(|m: &mut Self, i| m.send(Cmd::Scene(i))),
                     options: (0..SCENES)
                         .map(|i| RadioItem { label: scene_label(i).into(), ..Default::default() })
+                        .collect(),
+                }
+                .into(),
+                MenuItem::Separator,
+                RadioGroup {
+                    selected: self.state.sky,
+                    select: Box::new(|m: &mut Self, i| m.send(Cmd::Sky(i))),
+                    options: (0..SKIES)
+                        .map(|i| RadioItem { label: sky_label(i).into(), ..Default::default() })
                         .collect(),
                 }
                 .into(),

@@ -12,6 +12,7 @@ use winit::window::Window;
 
 use crate::render::Renderer;
 use crate::sim::Sim;
+use crate::sky::Sky;
 
 pub enum Gfx {
     Gpu(Renderer),
@@ -36,11 +37,11 @@ impl Gfx {
     }
 
     /// Рисует кадр. Возвращает `false`, если кадр получить не удалось.
-    pub fn render(&mut self, sim: &Sim, scale: f32) -> bool {
+    pub fn render(&mut self, sim: &Sim, sky: &Sky, scale: f32) -> bool {
         match self {
-            Gfx::Gpu(r) => r.render(sim, scale),
+            Gfx::Gpu(r) => r.render(sim, sky, scale),
             #[cfg(target_os = "macos")]
-            Gfx::Soft(s) => s.render(sim),
+            Gfx::Soft(s) => s.render(sim, sky),
         }
     }
 

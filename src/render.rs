@@ -5,8 +5,9 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
-use crate::look::{self, FEATHER_PX, SHADOW_PX, SHADOW_RGB};
+use crate::look::{self, FEATHER_PX, FlakeLook, SHADOW_PX, SHADOW_RGB};
 use crate::sim::{MAX_PARTICLES, Sim};
+use crate::sky::{SKY_MAX, Sky};
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -23,8 +24,9 @@ struct Flake {
     /// Полуразмеры вдоль и поперёк собственной оси, точки.
     half: [f32; 2],
     rotation: f32,
-    /// 0 — крупинка или штрих, 1 — лист.
+    /// Вид фигуры и её параметр (см. `FlakeShape::code`).
     shape: f32,
+    param: f32,
     color: [f32; 4],
 }
 
@@ -49,6 +51,7 @@ pub struct Renderer {
     pile_buf: wgpu::Buffer,
     pile_cap: u64,
     flakes: Vec<Flake>,
+    looks: Vec<FlakeLook>,
     pile: Vec<PileVertex>,
     /// Подробное описание выбранного адаптера — для журнала и диагностики.
     pub info: String,
@@ -237,7 +240,7 @@ impl Renderer {
             wgpu::VertexBufferLayout {
                 array_stride: size_of::<Flake>() as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x4],
+                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x3, 3 => Float32x4],
             },
         );
         let pile_pipeline = pipeline(
@@ -253,7 +256,7 @@ impl Renderer {
 
         let flake_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("flakes"),
-            size: (MAX_PARTICLES * size_of::<Flake>()) as u64,
+            size: ((MAX_PARTICLES + SKY_MAX) * size_of::<Flake>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -273,7 +276,8 @@ impl Renderer {
             flake_buf,
             pile_buf,
             pile_cap,
-            flakes: Vec::with_capacity(MAX_PARTICLES),
+            flakes: Vec::with_capacity(MAX_PARTICLES + SKY_MAX),
+            looks: Vec::with_capacity(MAX_PARTICLES + SKY_MAX),
             pile: Vec::new(),
             info,
             adapter: short,
@@ -338,7 +342,7 @@ impl Renderer {
     }
 
     /// Рисует кадр. Возвращает `false`, если кадр получить не удалось (окно скрыто и т. п.).
-    pub fn render(&mut self, sim: &Sim, scale: f32) -> bool {
+    pub fn render(&mut self, sim: &Sim, sky: &Sky, scale: f32) -> bool {
         use wgpu::CurrentSurfaceTexture as T;
         let frame = match self.surface.get_current_texture() {
             T::Success(f) | T::Suboptimal(f) => f,
@@ -349,16 +353,14 @@ impl Renderer {
             _ => return false,
         };
 
+        // небо рисуется под частицами
+        self.looks.clear();
+        sky.looks(sim.w, sim.h, &mut self.looks);
+        self.looks.extend(sim.particles.iter().take(MAX_PARTICLES).map(look::flake));
         self.flakes.clear();
-        self.flakes.extend(sim.particles.iter().take(MAX_PARTICLES).map(|p| {
-            let f = look::flake(p);
-            Flake {
-                center: f.center,
-                half: f.half,
-                rotation: f.rotation,
-                shape: if f.leaf { 1.0 } else { 0.0 },
-                color: f.color,
-            }
+        self.flakes.extend(self.looks.iter().map(|f| {
+            let (shape, param) = f.shape.code();
+            Flake { center: f.center, half: f.half, rotation: f.rotation, shape, param, color: f.color }
         }));
         self.build_piles(sim, scale);
 

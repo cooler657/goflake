@@ -1,7 +1,8 @@
 //! Внешний вид: как частица и куча превращаются в фигуры и цвета.
 //!
 //! Общий слой для обеих отрисовок — на видеокарте (`render.rs`) и на
-//! процессоре (`soft.rs`), чтобы они рисовали одно и то же.
+//! процессоре (`soft.rs`), чтобы они рисовали одно и то же. Формулы покрытия
+//! в `coverage` и в `shader.wgsl` — одни и те же.
 
 use crate::materials::Shape;
 use crate::sim::{COL_W, Particle, Sim};
@@ -14,14 +15,40 @@ pub const SHADOW_RGB: [f32; 3] = [0.1, 0.2, 0.4];
 pub const SHADOW_PX: f32 = 3.5;
 pub const FEATHER_PX: f32 = 1.5;
 
-/// Частица, готовая к отрисовке. Размеры — в логических точках.
+/// Форма фигуры в её собственных осях (x вдоль, y поперёк).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FlakeShape {
+    /// Круг или, если вытянут, штрих со скруглёнными концами.
+    Capsule,
+    /// Лист: заострённый овал с прожилкой.
+    Leaf,
+    /// Мягкое свечение: яркость падает от центра к краю по квадрату.
+    Glow,
+    /// Луна с фазой от 0 до 1: 0 — новолуние, 0.5 — полнолуние. Растущая
+    /// освещена справа, убывающая — слева.
+    Moon(f32),
+}
+
+impl FlakeShape {
+    /// Числовой код для шейдера: (вид, параметр).
+    pub fn code(self) -> (f32, f32) {
+        match self {
+            FlakeShape::Capsule => (0.0, 0.0),
+            FlakeShape::Leaf => (1.0, 0.0),
+            FlakeShape::Glow => (2.0, 0.0),
+            FlakeShape::Moon(phase) => (3.0, phase),
+        }
+    }
+}
+
+/// Фигура, готовая к отрисовке. Размеры — в логических точках.
 pub struct FlakeLook {
     pub center: [f32; 2],
-    /// Полуразмеры вдоль и поперёк собственной оси.
+    /// Полуразмеры вдоль и поперёк собственной оси. У круга, свечения и луны —
+    /// радиус в обоих.
     pub half: [f32; 2],
     pub rotation: f32,
-    /// Лист (заострённый овал с прожилкой) вместо крупинки или штриха.
-    pub leaf: bool,
+    pub shape: FlakeShape,
     /// Цвет без умножения на альфу.
     pub color: [f32; 4],
 }
@@ -30,32 +57,50 @@ pub fn flake(p: &Particle) -> FlakeLook {
     let m = p.kind.material();
     let c = m.colors[p.tint as usize % m.colors.len()];
     let color = [c[0], c[1], c[2], LAYER_ALPHA[p.layer.min(2) as usize] * m.alpha];
-    let (half, rotation, leaf) = match m.shape {
-        Shape::Dot => ([p.r, p.r], 0.0, false),
+    let (half, rotation, shape) = match m.shape {
+        Shape::Dot => ([p.r, p.r], 0.0, FlakeShape::Capsule),
         Shape::Streak => {
             // штрих вытянут вдоль скорости: чем быстрее капля, тем он длиннее
             let speed = (p.vx * p.vx + p.vy * p.vy).sqrt();
             let radius = (p.r * 0.4).max(0.4);
-            ([radius + (speed * 0.007).clamp(1.0, 7.0), radius], p.vy.atan2(p.vx), false)
+            ([radius + (speed * 0.007).clamp(1.0, 7.0), radius], p.vy.atan2(p.vx), FlakeShape::Capsule)
         }
-        Shape::Leaf => ([p.r, p.r * 0.5], p.angle, true),
+        Shape::Leaf => ([p.r, p.r * 0.5], p.angle, FlakeShape::Leaf),
     };
-    FlakeLook { center: [p.x, p.y], half, rotation, leaf, color }
+    FlakeLook { center: [p.x, p.y], half, rotation, shape, color }
 }
 
-/// Доля пикселя, покрытая частицей. `x`, `y` — точка в осях частицы,
-/// `a`, `b` — полуразмеры; всё в пикселях. Та же формула, что в шейдере.
+/// Доля пикселя, покрытая фигурой. `x`, `y` — точка в осях фигуры, `a`, `b` —
+/// полуразмеры; всё в пикселях. Та же формула, что в шейдере.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub fn coverage(leaf: bool, x: f32, y: f32, a: f32, b: f32) -> f32 {
-    if leaf {
-        let t = (x / a).clamp(-1.0, 1.0);
-        let f = b * (1.0 - t * t) - y.abs();
-        let k = 2.0 * b * t / a;
-        (f / (1.0 + k * k).sqrt() + 0.5).clamp(0.0, 1.0)
-    } else {
-        // капсула: при a == b это круг, при a > b — штрих со скруглёнными концами
-        let qx = (x.abs() - (a - b)).max(0.0);
-        (b - (qx * qx + y * y).sqrt() + 0.5).clamp(0.0, 1.0)
+pub fn coverage(shape: FlakeShape, x: f32, y: f32, a: f32, b: f32) -> f32 {
+    match shape {
+        FlakeShape::Capsule => {
+            // при a == b это круг, при a > b — штрих со скруглёнными концами
+            let qx = (x.abs() - (a - b)).max(0.0);
+            (b - (qx * qx + y * y).sqrt() + 0.5).clamp(0.0, 1.0)
+        }
+        FlakeShape::Leaf => {
+            let t = (x / a).clamp(-1.0, 1.0);
+            let f = b * (1.0 - t * t) - y.abs();
+            let k = 2.0 * b * t / a;
+            (f / (1.0 + k * k).sqrt() + 0.5).clamp(0.0, 1.0)
+        }
+        FlakeShape::Glow => {
+            let g = (1.0 - (x * x + y * y).sqrt() / a).clamp(0.0, 1.0);
+            g * g
+        }
+        FlakeShape::Moon(phase) => {
+            let disk = (a - (x * x + y * y).sqrt() + 0.5).clamp(0.0, 1.0);
+            // терминатор — половина эллипса: при полуночи на краю диска он
+            // прямой, при четверти проходит по середине, при полнолунии — по
+            // противоположному краю
+            let v = (y / a).clamp(-1.0, 1.0);
+            let w = (1.0 - v * v).max(0.0).sqrt();
+            let c = (std::f32::consts::TAU * phase).cos();
+            let edge = if phase < 0.5 { x - c * w * a } else { -c * w * a - x };
+            disk * (edge + 0.5).clamp(0.0, 1.0)
+        }
     }
 }
 
@@ -76,8 +121,8 @@ pub struct ContourPoint {
     pub base_color: [f32; 4],
 }
 
-/// Псевдослучайное число от 0 до 1 по целому — для пёстрых куч.
-fn hash01(n: u32) -> f32 {
+/// Псевдослучайное число от 0 до 1 по целому — для пёстрых куч и звёзд.
+pub fn hash01(n: u32) -> f32 {
     let mut x = n.wrapping_mul(0x9E37_79B1);
     x ^= x >> 15;
     x = x.wrapping_mul(0x85EB_CA6B);

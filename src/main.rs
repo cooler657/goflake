@@ -6,6 +6,7 @@
 // В релизной сборке под Windows не открываем окно консоли.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
+mod clock;
 mod gfx;
 mod look;
 mod materials;
@@ -13,6 +14,7 @@ mod platform;
 mod render;
 mod settings;
 mod sim;
+mod sky;
 mod soft;
 mod tray;
 
@@ -29,6 +31,7 @@ use platform::Platform;
 use gfx::Gfx;
 use settings::{RATES, Settings};
 use sim::{Rect, Sim, WindowInfo};
+use sky::Sky;
 use tray::{Cmd, MenuState, Tray};
 
 /// Как часто опрашивается список окон, секунды.
@@ -65,6 +68,7 @@ struct App {
     proxy: EventLoopProxy<Cmd>,
     settings: Settings,
     sim: Sim,
+    sky: Sky,
     platform: Platform,
     overlay: Option<Overlay>,
     tray: Option<Tray>,
@@ -100,6 +104,7 @@ impl App {
         MenuState {
             running: self.running,
             scene: self.settings.scene,
+            sky: self.settings.sky,
             rate: self.settings.rate,
             solid: self.settings.solid,
             dock: self.platform.dock_access(),
@@ -187,6 +192,7 @@ impl App {
 
     /// Редкие проверки: Dock, смена разрешения экрана, галочки в меню.
     fn slow_poll(&mut self, el: &ActiveEventLoop) {
+        self.sky.set_clock(clock::now());
         let Some(overlay) = &mut self.overlay else { return };
         let (pos, size) = overlay_geometry(el);
         if overlay.window.inner_size() != size || overlay.origin != (pos.x as f32, pos.y as f32) {
@@ -214,6 +220,7 @@ impl App {
             self.slow_acc = 0.0;
             self.slow_poll(el);
         }
+        self.sky.step(dt);
         let Some(overlay) = &mut self.overlay else { return };
 
         // курсор и его сглаженная скорость
@@ -239,7 +246,7 @@ impl App {
         }
 
         self.sim.step(dt, c, self.mouse_vel);
-        if !overlay.gfx.render(&self.sim, overlay.scale) {
+        if !overlay.gfx.render(&self.sim, &self.sky, overlay.scale) {
             // кадр недоступен (окно скрыто системой) — не крутим цикл вхолостую
             std::thread::sleep(Duration::from_millis(16));
         }
@@ -264,6 +271,11 @@ impl App {
             Cmd::Scene(i) => {
                 self.settings.scene = i.min(settings::SCENES - 1);
                 self.sim.set_kind(self.settings.kind());
+                self.settings.save();
+            }
+            Cmd::Sky(i) => {
+                self.settings.sky = i.min(settings::SKIES - 1);
+                self.sky.set_mode(self.settings.sky_mode());
                 self.settings.save();
             }
             Cmd::Rate(i) => {
@@ -373,12 +385,14 @@ fn main() {
         proxy: event_loop.create_proxy(),
         settings,
         sim,
+        sky: Sky::new(settings.sky_mode(), clock::now()),
         platform,
         overlay: None,
         tray: None,
         menu: MenuState {
             running: true,
             scene: settings.scene,
+            sky: settings.sky,
             rate: settings.rate,
             solid: settings.solid,
             dock: None,
