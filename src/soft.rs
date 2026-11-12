@@ -9,6 +9,7 @@
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use crate::decor;
+use crate::sim::heap;
 use crate::look::{self, FEATHER_PX, FlakeShape, SHADOW_PX, SHADOW_RGB};
 use crate::sim::Sim;
 use crate::sky::Sky;
@@ -96,6 +97,7 @@ impl Canvas {
         // украшения окон — после выреза, перед частицами
         let mut decor_looks = Vec::new();
         decor::looks(sim, &mut decor_looks);
+        heap::looks(sim, &mut decor_looks);
         for f in &decor_looks {
             self.flake(f, scale);
         }
@@ -192,7 +194,7 @@ impl Canvas {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::materials::KINDS;
+    use crate::materials::{KINDS, Kind};
     use crate::clock::Clock;
     use crate::sim::{Rect, WindowInfo};
     use crate::sky::{SkyMode, SkyPlace};
@@ -384,6 +386,37 @@ mod tests {
             let mut canvas = Canvas::new();
             canvas.draw(&sim, &sky(SkyMode::Off), 1.0);
             save(&format!("kind_{kind:?}").to_lowercase(), &canvas);
+        }
+        // шары, снеговик и холмики, собранные курсором
+        for kind in [Kind::Snow, Kind::Sand, Kind::Leaves] {
+            use crate::sim::heap::Heap;
+            let mut sim = Sim::new(9);
+            sim.w = 960.0;
+            sim.h = 540.0;
+            sim.rate = 0.0;
+            sim.set_kind(kind);
+            let win = [WindowInfo { id: 5, rect: Rect::new(160.0, 260.0, 640.0, 240.0) }];
+            sim.refresh(&win, None, 0.05);
+            for h in sim.surfaces.get_mut(&5).unwrap().h.iter_mut() {
+                *h = 3.0;
+            }
+            let pi = std::f32::consts::PI;
+            let mk = |x: f32, tiers: Vec<f32>| Heap { surface: 5, x, vx: 0.0, tiers, kind, anchor: (168.0, 260.0), seed: x as u32 };
+            if kind == Kind::Snow {
+                sim.heaps.push(mk(260.0, vec![pi * 169.0, pi * 64.0, pi * 25.0])); // снеговик
+                sim.heaps.push(mk(340.0, vec![pi * 100.0, pi * 36.0])); // двухъярусный
+                sim.heaps.push(mk(410.0, vec![pi * 81.0]));
+                sim.heaps.push(mk(450.0, vec![pi * 30.0]));
+                sim.heaps.push(mk(500.0, vec![pi * 144.0]));
+            } else {
+                sim.heaps.push(mk(260.0, vec![pi * 169.0]));
+                sim.heaps.push(mk(380.0, vec![pi * 81.0]));
+                sim.heaps.push(mk(470.0, vec![pi * 36.0]));
+                sim.heaps.push(mk(540.0, vec![pi * 16.0]));
+            }
+            let mut canvas = Canvas::new();
+            canvas.draw(&sim, &sky(SkyMode::Off), 1.0);
+            save(&format!("heap_{kind:?}").to_lowercase(), &canvas);
         }
     }
 }

@@ -36,6 +36,17 @@ pub enum Decor {
     Rocks,
 }
 
+/// Что получается, если курсором сгрести кучу этого материала.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gather {
+    /// Ничего не собирается (вода).
+    None,
+    /// Шар, который катится за курсором; шары ставятся друг на друга — снеговик.
+    Ball,
+    /// Холмик, который сдвигается курсором; холмики сливаются.
+    Heap,
+}
+
 /// Форма частицы при отрисовке.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
@@ -127,6 +138,8 @@ pub struct Material {
     pub haze: [f32; 4],
     /// Украшения на кромке окон.
     pub decor: Decor,
+    /// Что получается, если сгрести кучу курсором.
+    pub gather: Gather,
 }
 
 const SNOW: Material = Material {
@@ -166,6 +179,7 @@ const SNOW: Material = Material {
     side_spawn: 0.0,
     haze: [0.0; 4],
     decor: Decor::Fir,
+    gather: Gather::Ball,
 };
 
 /// Капли быстрые и тонкие; вода растекается ровным слоем, стекает с краёв и высыхает.
@@ -206,6 +220,7 @@ const RAIN: Material = Material {
     side_spawn: 0.0,
     haze: [0.0; 4],
     decor: Decor::Leafy,
+    gather: Gather::None,
 };
 
 /// Песчинки мелкие и тяжёлые, их сильно несёт ветром; куча держит крутой склон.
@@ -246,6 +261,7 @@ const SAND: Material = Material {
     side_spawn: 0.0,
     haze: [0.0; 4],
     decor: Decor::Cactus,
+    gather: Gather::Heap,
 };
 
 /// Листья крупные и лёгкие: падают медленно, порхают и кружатся, лежат рыхлым слоем.
@@ -292,6 +308,7 @@ const LEAVES: Material = Material {
     side_spawn: 0.0,
     haze: [0.0; 4],
     decor: Decor::Bare,
+    gather: Gather::Heap,
 };
 
 /// Пыль Марса: мелкая, быстрая и всегда боком. Ветер почти постоянный и порывистый,
@@ -334,6 +351,7 @@ const DUST: Material = Material {
     side_spawn: 0.7,
     haze: [0.85, 0.42, 0.22, 0.18],
     decor: Decor::Rocks,
+    gather: Gather::Heap,
 };
 
 impl Kind {

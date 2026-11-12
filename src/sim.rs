@@ -6,7 +6,9 @@
 
 use std::collections::HashMap;
 
-use crate::materials::Kind;
+use crate::materials::{Gather, Kind};
+
+pub mod heap;
 
 /// Ширина столбика кучи.
 pub const COL_W: f32 = 2.0;
@@ -160,6 +162,10 @@ pub struct Sim {
     pub wind_force: f32,
     /// Украшения на верхней кромке окон (деревья и т. п.).
     pub decor: bool,
+    /// Курсор сгребает кучи в шары и холмики (иначе разбрасывает).
+    pub gather: bool,
+    /// Шары, холмики и снеговики, которые собрал курсор.
+    pub heaps: Vec<heap::Heap>,
     solids: Vec<Rect>,
     t: f32,
     spawn_acc: f32,
@@ -236,6 +242,8 @@ impl Sim {
             wind_dir: WindDir::Auto,
             wind_force: 1.0,
             decor: true,
+            gather: true,
+            heaps: Vec::new(),
             solids: Vec::new(),
             t: 0.0,
             spawn_acc: 0.0,
@@ -253,6 +261,7 @@ impl Sim {
         if kind == self.kind {
             return;
         }
+        self.drop_all_heaps(false);
         for p in self.particles.iter_mut() {
             p.land = false;
         }
@@ -264,6 +273,7 @@ impl Sim {
 
     /// Сбрасывает все кучи — материал падает вниз.
     pub fn dump_all(&mut self) {
+        self.drop_all_heaps(true);
         for s in self.surfaces.values_mut() {
             dump(s, (0.0, 0.0), &mut self.particles, &mut self.rng, self.kind, true);
         }
@@ -400,7 +410,14 @@ impl Sim {
 
     /// `c` — положение курсора, `cv` — его скорость.
     pub fn step(&mut self, dt: f32, c: (f32, f32), cv: (f32, f32)) {
-        let Sim { w, h, particles, surfaces, kind, rate, solid, wind_dir, wind_force, decor: _, solids, t, spawn_acc, rng } = self;
+        // курсор собирает кучи в шары и холмики; у воды такого нет
+        let gather_on = self.gather && self.kind.material().gather != Gather::None;
+        if gather_on {
+            self.heaps_step(dt, c, cv);
+        } else if !self.heaps.is_empty() {
+            self.drop_all_heaps(true);
+        }
+        let Sim { w, h, particles, surfaces, kind, rate, solid, wind_dir, wind_force, decor: _, gather: _, heaps: _, solids, t, spawn_acc, rng } = self;
         let (w, h, solid, kind, wind_dir, force) = (*w, *h, *solid, *kind, *wind_dir, *wind_force);
         // материал, который падает сейчас и из которого состоят кучи
         let mat = kind.material();
@@ -468,7 +485,7 @@ impl Sim {
 
         // курсор сгребает кучи
         for s in surfaces.values_mut() {
-            if !(c.1 > s.y - mat.max_pile - CURSOR_R - 4.0 && c.1 < s.y + CURSOR_R) || s.h.is_empty() {
+            if gather_on || !(c.1 > s.y - mat.max_pile - CURSOR_R - 4.0 && c.1 < s.y + CURSOR_R) || s.h.is_empty() {
                 continue;
             }
             let a = (((c.0 - CURSOR_R - s.x0) / COL_W).floor() as isize).max(0);
@@ -764,6 +781,7 @@ mod tests {
     #[test]
     fn cursor_carves_the_pile() {
         let mut s = sim();
+        s.gather = false;
         s.rate = 0.0;
         let win = [WindowInfo { id: 7, rect: Rect::new(200.0, 300.0, 400.0, 300.0) }];
         s.refresh(&win, None, 0.05);

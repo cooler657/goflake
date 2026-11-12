@@ -61,7 +61,7 @@ pub fn plan(sim: &Sim) -> Vec<Item> {
             if !seen || x < 0.0 || x > sim.w {
                 continue;
             }
-            items.push(Item { x, base: s.y, height: 48.0 + 50.0 * hash01(seed ^ 0x5bd1), seed });
+            items.push(Item { x, base: s.y, height: (48.0 + 50.0 * hash01(seed ^ 0x5bd1)) / 4.0, seed });
         }
     }
     items
@@ -94,9 +94,9 @@ pub fn looks(sim: &Sim, out: &mut Vec<FlakeLook>) {
 fn fir(it: &Item, out: &mut Vec<FlakeLook>) {
     let (x, b, h) = (it.x, it.base, it.height);
     let trunk = h * 0.14;
-    let rt = (h * 0.04).max(2.0);
+    let rt = (h * 0.04).max(0.6);
     out.push(bar([x, b - rt], [x, b - trunk], rt, [0.30, 0.20, 0.12]));
-    const BARS: usize = 16;
+    const BARS: usize = 12;
     const TIERS: f32 = 5.0;
     let wmax = h * 0.6;
     let thick = (h - trunk) / BARS as f32;
@@ -110,7 +110,7 @@ fn fir(it: &Item, out: &mut Vec<FlakeLook>) {
         let r = thick * 0.62;
         out.push(bar([x - w / 2.0 + r, y], [x + w / 2.0 - r, y], r, green));
         // снег лежит на самых широких местах ярусов
-        if f < 1.0 / TIERS * 1.6 && w > 8.0 {
+        if f < 1.0 / TIERS * 1.6 && w > 2.5 {
             out.push(bar([x - w * 0.38, y - r * 0.5], [x + w * 0.38, y - r * 0.5], r * 0.4, [0.97, 0.98, 1.0]));
         }
     }
@@ -121,7 +121,7 @@ fn fir(it: &Item, out: &mut Vec<FlakeLook>) {
 /// Дерево весной: тёмный ствол, пышная зелёная крона и розовые цветы.
 fn leafy(it: &Item, out: &mut Vec<FlakeLook>) {
     let (x, b, h) = (it.x, it.base, it.height);
-    let rt = (h * 0.045).max(2.0);
+    let rt = (h * 0.045).max(0.6);
     out.push(bar([x, b - rt], [x, b - h * 0.5], rt, [0.42, 0.28, 0.17]));
     let c = [x, b - h * 0.66];
     let greens = [[0.28, 0.58, 0.28], [0.36, 0.68, 0.33], [0.24, 0.52, 0.27]];
@@ -133,14 +133,14 @@ fn leafy(it: &Item, out: &mut Vec<FlakeLook>) {
     for i in 0..8u32 {
         let a = hash01(it.seed + i * 7) * 2.0 * PI;
         let d = hash01(it.seed + i * 7 + 1).sqrt() * h * 0.26;
-        out.push(circle([c[0] + a.cos() * d, c[1] - 0.04 * h + a.sin() * d], 2.2, [0.97, 0.72, 0.82]));
+        out.push(circle([c[0] + a.cos() * d, c[1] - 0.04 * h + a.sin() * d], 0.7, [0.97, 0.72, 0.82]));
     }
 }
 
 /// Кактус: ствол и одна-две «руки».
 fn cactus(it: &Item, out: &mut Vec<FlakeLook>) {
     let (x, b, h) = (it.x, it.base, it.height * 0.85);
-    let r = (h * 0.085).max(3.5);
+    let r = (h * 0.085).max(1.1);
     let green = [0.28, 0.56, 0.31];
     let light = [0.36, 0.65, 0.37];
     out.push(bar([x, b - r], [x, b - h + r], r, green));
@@ -163,7 +163,7 @@ fn cactus(it: &Item, out: &mut Vec<FlakeLook>) {
 fn bare(it: &Item, out: &mut Vec<FlakeLook>) {
     fn branch(out: &mut Vec<FlakeLook>, p: [f32; 2], angle: f32, len: f32, r: f32, depth: u32, seed: u32) {
         let end = [p[0] + angle.sin() * len, p[1] - angle.cos() * len];
-        out.push(bar(p, end, r.max(0.8), [0.42, 0.30, 0.21]));
+        out.push(bar(p, end, r.max(0.35), [0.42, 0.30, 0.21]));
         if depth == 0 {
             return;
         }
@@ -175,7 +175,7 @@ fn bare(it: &Item, out: &mut Vec<FlakeLook>) {
         }
     }
     let lean = (hash01(it.seed ^ 0x33) - 0.5) * 0.18;
-    let r = (it.height * 0.04).max(1.8);
+    let r = (it.height * 0.04).max(0.6);
     branch(out, [it.x, it.base - r], lean, it.height * 0.36, r, 4, it.seed);
 }
 
@@ -261,7 +261,7 @@ mod tests {
             s.set_kind(kind);
             let mut out = Vec::new();
             looks(&s, &mut out);
-            assert!(out.len() > 10 && out.len() <= DECOR_MAX, "{kind:?}: {} фигур", out.len());
+            assert!(out.len() > 5 && out.len() <= DECOR_MAX, "{kind:?}: {} фигур", out.len());
             // всё стоит над кромкой (основание чуть заходит вниз) и в пределах окна по ширине
             for f in &out {
                 assert!(f.center[0].is_finite() && f.center[1].is_finite() && f.color[3] <= 1.0);

@@ -112,6 +112,7 @@ impl App {
             rate: self.settings.rate,
             solid: self.settings.solid,
             decor: self.settings.decor,
+            gather: self.settings.gather,
             dock: self.platform.dock_access(),
             gpu: self.overlay.as_ref().map_or(self.settings.gpu, |o| !o.gfx.software()),
             gpu_switchable: self.software_available,
@@ -313,6 +314,11 @@ impl App {
                 self.sim.decor = self.settings.decor;
                 self.settings.save();
             }
+            Cmd::Cursor(i) => {
+                self.settings.gather = i == 1;
+                self.sim.gather = self.settings.gather;
+                self.settings.save();
+            }
             Cmd::Shake => self.sim.dump_all(),
             Cmd::Gpu => {
                 if self.software_available {
@@ -395,6 +401,7 @@ fn main() {
     sim.rate = RATES[settings.rate].1;
     sim.solid = settings.solid;
     sim.decor = settings.decor;
+    sim.gather = settings.gather;
     sim.wind_dir = settings.wind_dir();
     sim.wind_force = settings.wind_force_value();
     sim.set_kind(settings.kind());
@@ -431,6 +438,7 @@ fn main() {
             rate: settings.rate,
             solid: settings.solid,
             decor: settings.decor,
+            gather: settings.gather,
             dock: None,
             gpu: settings.gpu,
             gpu_switchable: false,

@@ -6,7 +6,7 @@
 
 use winit::event_loop::EventLoopProxy;
 
-use crate::settings::{PLACE_COUNT, RATES, SCENES, SKIES, WIND_DIRS, WIND_FORCES, place_label, scene_label, sky_label};
+use crate::settings::{CURSOR_MODES, PLACE_COUNT, RATES, SCENES, SKIES, WIND_DIRS, WIND_FORCES, place_label, scene_label, sky_label};
 
 /// Команда из меню. Она же — пользовательское событие цикла событий.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -26,6 +26,8 @@ pub enum Cmd {
     Solid,
     /// Показать или спрятать украшения на окнах.
     Decor,
+    /// Что делает курсор с кучами: 0 — разбрасывает, 1 — собирает в шары и холмики.
+    Cursor(usize),
     Shake,
     /// Переключить аппаратное ускорение.
     Gpu,
@@ -47,6 +49,7 @@ pub struct MenuState {
     pub rate: usize,
     pub solid: bool,
     pub decor: bool,
+    pub gather: bool,
     /// `None` — пункта про Dock нет (разрешение не требуется).
     pub dock: Option<bool>,
     /// Отрисовка идёт на видеокарте.
@@ -64,6 +67,7 @@ const L_WIND: &str = "Ветер";
 const L_RATE: &str = "Интенсивность";
 const L_SOLID: &str = "Не засыпать содержимое окон";
 const L_DECOR: &str = "Украшения на окнах (деревья, кактусы)";
+const L_CURSOR: &str = "Курсор";
 const L_SHAKE: &str = "Стряхнуть всё";
 const L_DOCK: &str = "Ложиться на Dock (нужен Универсальный доступ)";
 const L_GPU: &str = "Аппаратное ускорение (GPU)";
@@ -125,6 +129,7 @@ mod imp {
         rates: Vec<CheckMenuItem>,
         solid: CheckMenuItem,
         decor: CheckMenuItem,
+        cursors: Vec<CheckMenuItem>,
         dock: Option<CheckMenuItem>,
         gpu: CheckMenuItem,
         adapter: MenuItem,
@@ -151,6 +156,8 @@ mod imp {
                     Cmd::Wind(i)
                 } else if let Some(i) = num("wforce") {
                     Cmd::WindForce(i)
+                } else if let Some(i) = num("cursor") {
+                    Cmd::Cursor(i)
                 } else {
                     Cmd::Rate(num("rate")?)
                 }
@@ -209,6 +216,10 @@ mod imp {
                 let forces = radio(&sub, "wforce", &force_labels, state.wind_force)?;
                 menu.append(&sub)?;
 
+                let sub = Submenu::new(L_CURSOR, true);
+                let cursors = radio(&sub, "cursor", &CURSOR_MODES, state.gather as usize)?;
+                menu.append(&sub)?;
+
                 let sub = Submenu::new(L_RATE, true);
                 let rate_labels: Vec<&str> = RATES.iter().map(|r| r.0).collect();
                 let rates = radio(&sub, "rate", &rate_labels, state.rate)?;
@@ -236,9 +247,9 @@ mod imp {
                 menu.append(&adapter)?;
                 menu.append(&sep())?;
                 menu.append(&MenuItem::with_id("quit", L_QUIT, true, None))?;
-                Ok((menu, running, scenes, skies, places, winds, forces, rates, solid, decor, dock, gpu, adapter))
+                Ok((menu, running, scenes, skies, places, winds, forces, rates, solid, decor, cursors, dock, gpu, adapter))
             };
-            let (menu, running, scenes, skies, places, winds, forces, rates, solid, decor, dock, gpu, adapter) =
+            let (menu, running, scenes, skies, places, winds, forces, rates, solid, decor, cursors, dock, gpu, adapter) =
                 build().map_err(|e| e.to_string())?;
 
             MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
@@ -257,7 +268,7 @@ mod imp {
             let builder = builder.with_icon(icon([205, 230, 255])?);
             let tray = builder.build().map_err(|e| e.to_string())?;
 
-            Ok(Self { _icon: tray, running, scenes, skies, places, winds, forces, rates, solid, decor, dock, gpu, adapter })
+            Ok(Self { _icon: tray, running, scenes, skies, places, winds, forces, rates, solid, decor, cursors, dock, gpu, adapter })
         }
 
         /// Приводит галочки в соответствие с состоянием приложения.
@@ -274,6 +285,7 @@ mod imp {
             check(&self.rates, state.rate);
             self.solid.set_checked(state.solid);
             self.decor.set_checked(state.decor);
+            check(&self.cursors, state.gather as usize);
             if let (Some(item), Some(ok)) = (&self.dock, state.dock) {
                 item.set_checked(ok);
             }
@@ -362,6 +374,7 @@ mod imp {
                         radio(s.wind_force, WIND_FORCES.iter().map(|f| f.0).collect(), Cmd::WindForce),
                     ],
                 ),
+                submenu(L_CURSOR, vec![radio(s.gather as usize, CURSOR_MODES.to_vec(), Cmd::Cursor)]),
                 submenu(L_RATE, vec![radio(s.rate, RATES.iter().map(|r| r.0).collect(), Cmd::Rate)]),
                 MenuItem::Separator,
                 CheckmarkItem {
