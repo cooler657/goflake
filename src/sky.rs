@@ -14,7 +14,7 @@ use crate::look::{FlakeLook, FlakeShape, hash01};
 /// Радиус диска солнца, точки.
 pub const SUN_R: f32 = 22.0;
 /// Сколько лучей у солнца.
-const BEAMS: usize = 18;
+const BEAMS: usize = 24;
 
 /// Сколько фигур небо может отдать за кадр (под него запасён буфер на GPU).
 pub const SKY_MAX: usize = 256;
@@ -71,8 +71,10 @@ impl SkyPlace {
 
 /// Отступ тела от бокового края экрана в углу, точки.
 const CORNER_X: f32 = 90.0;
-/// Высота центра тела над экраном: ниже строки меню вместе с лучами и свечением.
+/// Высота центра луны над экраном: ниже строки меню вместе со свечением.
 const TOP_Y: f32 = 96.0;
+/// Высота центра солнца: выше луны, у самого верха экрана, диск — под строкой меню.
+const SUN_TOP_Y: f32 = 58.0;
 
 /// Время восхода и заката, часы. Дни длиннее летом и короче зимой
 /// (северное полушарие); полдень — в 12:30.
@@ -185,11 +187,12 @@ impl Sky {
         let start = out.len();
         // насколько тело близко к горизонту: от этого оно ниже на дуге и краснее
         let horizon = 1.0 - (PI * c.t).sin();
+        let top = if c.moon { TOP_Y } else { SUN_TOP_Y };
         let (cx, cy) = match self.place {
             // дуга: у горизонта ниже, в зените выше; под строкой меню
-            SkyPlace::Arc => (w * (0.08 + 0.84 * c.t), TOP_Y + horizon * (h * 0.16).clamp(80.0, 180.0)),
-            SkyPlace::Left => (CORNER_X, TOP_Y),
-            SkyPlace::Right => (w - CORNER_X, TOP_Y),
+            SkyPlace::Arc => (w * (0.08 + 0.84 * c.t), top + horizon * (h * 0.16).clamp(80.0, 180.0)),
+            SkyPlace::Left => (CORNER_X, top),
+            SkyPlace::Right => (w - CORNER_X, top),
         };
         if c.moon {
             self.stars(w, h, c.alpha, out);
@@ -200,8 +203,8 @@ impl Sky {
         out.truncate(start + SKY_MAX);
     }
 
-    /// Солнце: мягкое свечение, раскалённое ядро и веер длинных лучей, которые
-    /// расходятся в сторону центра экрана — как лучи света, пробивающиеся сквозь дымку.
+    /// Солнце: мягкое свечение, раскалённое ядро и лучи во все стороны — длинные
+    /// мягкие клинья света, как лучи сквозь дымку.
     fn sun(&self, c: [f32; 2], horizon: f32, a: f32, w: f32, h: f32, out: &mut Vec<FlakeLook>) {
         // у горизонта свет краснее
         let red = horizon.powf(1.6);
@@ -210,24 +213,20 @@ impl Sky {
         let hot = mix([1.0, 0.97, 0.80], [1.0, 0.70, 0.40], red);
 
         out.push(shape(c, [SUN_R * 5.0; 2], 0.0, FlakeShape::Glow, col, 0.45 * a));
-        // лучи идут от солнца к центру экрана: у солнца в углу — вниз и в сторону
         let diag = (w * w + h * h).sqrt();
-        let base = (h * 0.5 - c[1]).atan2(w * 0.5 - c[0]);
-        let spread = 0.62;
         for i in 0..BEAMS {
             let k = 1000 + i as u32 * 8;
-            let frac = i as f32 / (BEAMS - 1) as f32;
-            let off = (frac - 0.5) * 2.0 * spread + (hash01(k) - 0.5) * 0.05;
-            // каждый луч медленно покачивается и мерцает по-своему
-            let sway = (self.anim * 0.18 + hash01(k + 1) * TAU).sin() * 0.025;
+            // лучи расходятся по кругу с неровным шагом; весь веер очень медленно
+            // поворачивается, а каждый луч ещё качается и мерцает по-своему
+            let ang = (i as f32 + hash01(k) * 0.6 - 0.3) * TAU / BEAMS as f32
+                + self.anim * 0.02
+                + (self.anim * 0.18 + hash01(k + 1) * TAU).sin() * 0.025;
             let pulse = 0.75 + 0.25 * (self.anim * 0.6 + hash01(k + 2) * TAU).sin();
-            let ang = base + off + sway;
-            let len = diag * (0.32 + 0.45 * hash01(k + 3));
-            // каждый третий луч — тонкий и яркий, остальные — широкие и мягкие
+            // каждый третий луч — тонкий, яркий и длиннее, остальные — широкие и мягкие
             let thin = i % 3 == 1;
-            let width = if thin { 3.0 + 4.0 * hash01(k + 4) } else { 26.0 + 70.0 * hash01(k + 4).powi(2) };
-            let centre = 1.0 - (off / spread).abs() * 0.5;
-            let alpha = (0.22 + 0.25 * hash01(k + 5)) * if thin { 1.1 } else { 1.0 } * centre * pulse * a;
+            let len = diag * if thin { 0.22 + 0.30 * hash01(k + 3) } else { 0.14 + 0.26 * hash01(k + 3) };
+            let width = if thin { 3.0 + 4.0 * hash01(k + 4) } else { 20.0 + 45.0 * hash01(k + 4).powi(2) };
+            let alpha = (0.22 + 0.25 * hash01(k + 5)) * if thin { 1.1 } else { 1.0 } * pulse * a;
             let (s, co) = ang.sin_cos();
             let mid = SUN_R * 0.5 + len * 0.5;
             out.push(shape([c[0] + co * mid, c[1] + s * mid], [len * 0.5, width], ang, FlakeShape::Beam, ray, alpha));
@@ -381,8 +380,8 @@ mod tests {
             body.map(|f| f.center).unwrap()
         };
         for hour in [9.0, 12.5, 17.0] {
-            assert_eq!(center(SkyPlace::Right, SkyMode::Sun, hour), [1440.0 - CORNER_X, TOP_Y]);
-            assert_eq!(center(SkyPlace::Left, SkyMode::Sun, hour), [CORNER_X, TOP_Y]);
+            assert_eq!(center(SkyPlace::Right, SkyMode::Sun, hour), [1440.0 - CORNER_X, SUN_TOP_Y]);
+            assert_eq!(center(SkyPlace::Left, SkyMode::Sun, hour), [CORNER_X, SUN_TOP_Y]);
         }
         for hour in [22.0, 1.0, 4.0] {
             assert_eq!(center(SkyPlace::Right, SkyMode::Moon, hour), [1440.0 - CORNER_X, TOP_Y]);
@@ -392,21 +391,25 @@ mod tests {
     }
 
     #[test]
-    fn sun_beams_fan_out_toward_the_screen_centre() {
+    fn sun_beams_radiate_in_all_directions_from_the_sun() {
         let mut sky = Sky::new(SkyMode::Sun, at(12.5, 5.5));
         sky.set_place(SkyPlace::Right);
         let mut out = Vec::new();
         sky.looks(1440.0, 900.0, &mut out);
-        let sun = [1440.0 - CORNER_X, TOP_Y];
-        let to_centre = (450.0f32 - sun[1]).atan2(720.0 - sun[0]);
+        let sun = [1440.0 - CORNER_X, SUN_TOP_Y];
         let beams: Vec<_> = out.iter().filter(|f| f.shape == FlakeShape::Beam).collect();
+        assert_eq!(beams.len(), BEAMS);
+        let mut octants = [0; 8];
         for b in &beams {
-            // каждый луч выходит из солнца и смотрит примерно к центру экрана
+            // каждый луч выходит из солнца
             let (s, c) = b.rotation.sin_cos();
             let start = [b.center[0] - c * b.half[0], b.center[1] - s * b.half[0]];
             assert!((start[0] - sun[0]).abs() < 15.0 && (start[1] - sun[1]).abs() < 15.0);
-            assert!((b.rotation - to_centre).abs() < 0.7, "{} против {}", b.rotation, to_centre);
+            let octant = ((b.rotation.rem_euclid(TAU) / (TAU / 8.0)) as usize).min(7);
+            octants[octant] += 1;
         }
+        // и лучи есть в каждой из восьми сторон света, а не в узком секторе
+        assert!(octants.iter().all(|n| *n >= 1), "лучи только в части сторон: {octants:?}");
         // лучи разной ширины: и тонкие, и широкие
         let widths: Vec<f32> = beams.iter().map(|b| b.half[1]).collect();
         assert!(widths.iter().any(|w| *w < 8.0) && widths.iter().any(|w| *w > 25.0));

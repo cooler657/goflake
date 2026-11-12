@@ -293,22 +293,22 @@ mod tests {
         sim.h = 540.0;
         sim.rate = 0.0;
         let mut sun = sky(SkyMode::Sun);
-        sun.set_place(SkyPlace::Right); // солнце в (870, 96)
+        sun.set_place(SkyPlace::Right); // солнце в (870, 58)
         let alpha = |canvas: &Canvas, x: usize, y: usize| canvas.pixels[y * canvas.width + x] >> 24;
 
         let mut open = Canvas::new();
         open.draw(&sim, &sun, 1.0);
-        assert!(alpha(&open, 870, 96) > 200 && alpha(&open, 860, 96) > 200, "солнце не нарисовано");
+        assert!(alpha(&open, 870, 58) > 200 && alpha(&open, 860, 58) > 200, "солнце не нарисовано");
 
         // окно закрывает правую половину солнца и больше ничего
         let win = [WindowInfo { id: 5, rect: Rect::new(870.0, 50.0, 400.0, 300.0) }];
         sim.refresh(&win, None, 0.05);
         let mut covered = Canvas::new();
         covered.draw(&sim, &sun, 1.0);
-        assert_eq!(alpha(&covered, 880, 96), 0, "за окном небо должно пропасть");
+        assert_eq!(alpha(&covered, 880, 58), 0, "за окном небо должно пропасть");
         assert_eq!(alpha(&covered, 940, 300), 0);
-        assert!(alpha(&covered, 860, 96) > 200, "вне окна небо остаётся");
-        assert_eq!(covered.pixels[96 * covered.width + 860], open.pixels[96 * open.width + 860]);
+        assert!(alpha(&covered, 860, 58) > 200, "вне окна небо остаётся");
+        assert_eq!(covered.pixels[58 * covered.width + 860], open.pixels[58 * open.width + 860]);
     }
 
     #[test]
