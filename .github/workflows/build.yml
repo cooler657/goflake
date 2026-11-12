@@ -1,9 +1,13 @@
 name: build
 
+# Сборка и тесты — на каждый пуш и запрос на слияние. Релиз с готовыми файлами для
+# трёх систем — когда в репозиторий приходит тег вида v0.3.0 (или вручную).
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -12,19 +16,63 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            artifact: target/release/snowdrift
+            name: Snowdrift-macos-arm64
           - os: windows-latest
-            artifact: target/release/snowdrift.exe
+            name: Snowdrift-windows-x64
           - os: ubuntu-latest
-            artifact: target/release/snowdrift
+            name: Snowdrift-linux-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
-      - run: cargo build --release --locked
+
+      # macOS: приложение Snowdrift.app (сборка и подпись — в скрипте), в zip
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sh scripts/bundle-macos.sh
+          ditto -c -k --keepParent dist/Snowdrift.app "${{ matrix.name }}.zip"
+
+      # Windows: один snowdrift.exe в zip
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --release --locked
+          Compress-Archive -Path target/release/snowdrift.exe -DestinationPath "${{ matrix.name }}.zip"
+
+      # Linux: один бинарник в tar.gz
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --release --locked
+          tar -C target/release -czf "${{ matrix.name }}.tar.gz" snowdrift
+
       - uses: actions/upload-artifact@v4
         with:
-          name: snowdrift-${{ matrix.os }}
-          path: ${{ matrix.artifact }}
+          name: ${{ matrix.name }}
+          path: |
+            ${{ matrix.name }}.zip
+            ${{ matrix.name }}.tar.gz
+          if-no-files-found: error
+
+  # Релиз: только по тегу. Собирает файлы всех трёх сборок в один релиз на GitHub.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Show what is released
+        run: ls -l dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

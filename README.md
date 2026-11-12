@@ -133,9 +133,30 @@ open dist/Snowdrift.app
 поддержкой EWMH — это любой распространённый рабочий стол. Для значка в трее
 нужна поддержка StatusNotifierItem (в GNOME — расширение AppIndicator).
 
-Сборка под все три системы настроена в GitHub Actions
-(`.github/workflows/build.yml`) и заработает, когда у репозитория появится
-origin на GitHub.
+### Готовые сборки и релизы
+
+Сборка и тесты под все три системы идут в GitHub Actions
+(`.github/workflows/build.yml`) на каждый пуш. Чтобы выпустить релиз с готовыми
+файлами, достаточно поставить тег версии:
+
+```sh
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+Actions соберёт приложение на macOS, Windows и Linux, упакует и приложит к
+новому релизу на GitHub: `Snowdrift-macos-arm64.zip` (приложение
+`Snowdrift.app`), `Snowdrift-windows-x64.zip` (`snowdrift.exe`) и
+`Snowdrift-linux-x64.tar.gz`. Описание релиза создаётся из коммитов. Перед
+тегом версию в `Cargo.toml` стоит поднять до той же.
+
+Файлы не подписаны сертификатом разработчика, поэтому системы предупредят:
+- **macOS** — «приложение повреждено» или «неизвестный разработчик». Нужно один
+  раз выполнить `xattr -dr com.apple.quarantine Snowdrift.app` или открыть
+  приложение через контекстное меню «Открыть».
+- **Windows** — окно SmartScreen: «Подробнее» → «Выполнить в любом случае».
+
+Сборка под macOS в релизе только для Apple Silicon (arm64).
 
 ## Управление
 
