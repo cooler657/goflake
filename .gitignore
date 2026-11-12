@@ -1,2 +1,5 @@
+target/
+dist/
 Snowdrift.app/
+swift/Snowdrift.app/
 .DS_Store
