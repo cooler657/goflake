@@ -41,6 +41,8 @@ final class Sim {
     var rate: CGFloat = 40          // снежинок в секунду на 1000 pt ширины
     var t: CGFloat = 0
     var spawnAcc: CGFloat = 0
+    var solid = false               // окна непроницаемы: снег не идёт поверх их содержимого
+    var solids: [CGRect] = []       // рамки всех обычных окон на экране
     let myPid = Int(ProcessInfo.processInfo.processIdentifier)
 
     // MARK: частицы
@@ -78,36 +80,54 @@ final class Sim {
     // MARK: окна
 
     func upsert(_ id: Int, frame: CGRect, xA: CGFloat, xB: CGFloat, y: CGFloat,
-                occ: [CGRect], pollDt: CGFloat) {
+                occ: [(rect: CGRect, id: Int?)], pollDt: CGFloat) {
         let n = Int((xB - xA) / colW)
         guard n > 4 else { return }
-        var s = surfaces[id]
-        if let old = s {
+        let surf: Surface
+        if let old = surfaces[id] {
             let dx = frame.minX - old.frame.minX, dy = frame.minY - old.frame.minY
-            if abs(dx) > 0.5 || abs(dy) > 0.5 || abs(frame.width - old.frame.width) > 0.5 || old.h.count != n {
-                // окно сдвинули / растянули — снег стряхивается
+            if old.h.count != n {
+                // окно растянули: снег остаётся на своём месте на экране, лишнее падает
+                let shift = Int(((xA - old.x0) / colW).rounded())
+                var h = Array(repeating: CGFloat(0), count: n)
+                for i in 0..<old.h.count where old.h[i] > 0 {
+                    let j = i - shift
+                    if j >= 0 && j < n { h[j] = old.h[i]; old.h[i] = 0 }
+                }
+                dump(old, vel: .zero)
+                old.h = h
+                old.vis = Array(repeating: true, count: n)
+            } else if abs(dx) > 0.5 || abs(dy) > 0.5 {
+                // окно подвинули — снег стряхивается
                 var v = CGPoint(x: dx / pollDt, y: dy / pollDt)
                 v.x = max(-800, min(800, v.x)); v.y = max(-800, min(800, v.y))
                 dump(old, vel: v)
-                s = nil
             }
+            old.frame = frame; old.x0 = xA; old.y = y
+            surf = old
+        } else {
+            surf = Surface(frame: frame, x0: xA, y: y, n: n)
         }
-        let surf = s ?? Surface(frame: frame, x0: xA, y: y, n: n)
         surf.seen = true
         for i in 0..<n {
             let x = xA + (CGFloat(i) + 0.5) * colW
-            let v = x >= 0 && x < W && !occ.contains {
-                $0.minX <= x && x < $0.maxX && $0.minY < y - 1 && $0.maxY > y - 1
+            let cover = occ.first {
+                $0.rect.minX <= x && x < $0.rect.maxX && $0.rect.minY < y - 1 && $0.rect.maxY > y - 1
             }
-            surf.vis[i] = v
-            if !v { surf.h[i] = 0 }
+            surf.vis[i] = cover == nil && x >= 0 && x < W
+            // окно спереди наехало на сугроб — снег поднимается на его кромку
+            if surf.h[i] > 0, let cid = cover?.id, let front = surfaces[cid] {
+                let c = max(0, min(front.h.count - 1, Int((x - front.x0) / colW)))
+                front.h[c] += surf.h[i]
+                surf.h[i] = 0
+            }
         }
         surfaces[id] = surf
     }
 
     func refreshWindows(dock: CGRect?, pollDt: CGFloat) {
         for s in surfaces.values { s.seen = false }
-        var occ: [CGRect] = []
+        var occ: [(rect: CGRect, id: Int?)] = []
         let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] ?? []
         for w in list {   // порядок: от переднего окна к заднему
@@ -116,17 +136,20 @@ final class Sim {
                   (w[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
                   let bd = w[kCGWindowBounds as String] as? NSDictionary,
                   let b = CGRect(dictionaryRepresentation: bd as CFDictionary) else { continue }
+            var sid: Int?
             if b.width >= 160, b.height >= 80, b.minY > 5, b.minY < H - 20, b.maxX > 0, b.minX < W,
                let id = w[kCGWindowNumber as String] as? Int {
                 // отступ 8 pt — скруглённые углы окна
                 upsert(id, frame: b, xA: b.minX + 8, xB: b.maxX - 8, y: b.minY, occ: occ, pollDt: pollDt)
+                if surfaces[id]?.seen == true { sid = id }
             }
-            if b.width >= 50, b.height >= 50 { occ.append(b) }
+            if b.width >= 50, b.height >= 50 { occ.append((b, sid)) }
         }
-        var groundOcc: [CGRect] = []
+        solids = occ.map { $0.rect }
+        var groundOcc: [(rect: CGRect, id: Int?)] = []
         if let d = dock {
             upsert(-1, frame: d, xA: d.minX, xB: d.maxX, y: d.minY - 5, occ: [], pollDt: pollDt)
-            groundOcc = [CGRect(x: d.minX - 12, y: 0, width: d.width + 24, height: H + 10)]
+            groundOcc = [(CGRect(x: d.minX - 12, y: 0, width: d.width + 24, height: H + 10), nil)]
         }
         upsert(0, frame: CGRect(x: 0, y: H, width: W, height: 1), xA: 0, xB: W, y: H,
                occ: groundOcc, pollDt: pollDt)
@@ -185,7 +208,7 @@ final class Sim {
         var i = 0
         while i < particles.count {
             var p = particles[i]
-            let prevY = p.y
+            let prevX = p.x, prevY = p.y
             let term: CGFloat = p.debris ? 460 : 28 + p.r * 20
             let k: CGFloat = p.debris ? 2.2 : 3
             let tx = p.debris ? wind * 0.3 : wind * (0.5 + p.r * 0.25) + 14 * sin(t * 1.7 + p.phase)
@@ -206,7 +229,7 @@ final class Sim {
             p.y += p.vy * dt
 
             var dead = p.y > H + 12 || p.x < -80 || p.x > W + 80
-            if !dead && p.land && p.vy > 0 {
+            if !dead && (p.land || solid) && p.vy > 0 {
                 for s in surfs where p.y >= s.y - maxPile - 30 && prevY <= s.y + 2 {
                     let col = Int(((p.x - s.x0) / colW).rounded(.down))
                     guard col >= 0, col < s.h.count, s.vis[col] else { continue }
@@ -216,6 +239,20 @@ final class Sim {
                     if p.debris || rnd(0, 1) > fill * fill {
                         deposit(s, col, p.mass)
                         dead = true
+                    } else if solid && s.y < H - 1 {
+                        dead = true   // сугроб полон — снежинка тает, но в окно не залетает
+                    }
+                    break
+                }
+            }
+            if !dead && solid {
+                for r in solids where p.x > r.minX && p.x < r.maxX && p.y > r.minY && p.y < r.maxY {
+                    if prevY > r.minY && prevX <= r.minX {          // удар о левый край окна
+                        p.x = r.minX - 0.5; p.vx = -abs(p.vx) * 0.3
+                    } else if prevY > r.minY && prevX >= r.maxX {   // удар о правый край
+                        p.x = r.maxX + 0.5; p.vx = abs(p.vx) * 0.3
+                    } else {
+                        dead = true   // упала на кромку без сугроба или окно накрыло её
                     }
                     break
                 }
@@ -247,7 +284,7 @@ final class Sim {
                 s.h[0] -= m; s.spillL += m * colW
                 while s.spillL >= 4 {
                     s.spillL -= 4
-                    debris(s.x0 - 1, s.y - rnd(0, s.h[0]), rnd(-30, -6), rnd(-10, 10), 4)
+                    debris(s.frame.minX - 1, s.y - rnd(0, s.h[0]), rnd(-30, -6), rnd(-10, 10), 4)
                 }
             }
             if s.vis[n - 1], s.h[n - 1] > 2 {
@@ -255,7 +292,7 @@ final class Sim {
                 s.h[n - 1] -= m; s.spillR += m * colW
                 while s.spillR >= 4 {
                     s.spillR -= 4
-                    debris(s.x0 + CGFloat(n) * colW + 1, s.y - rnd(0, s.h[n - 1]), rnd(6, 30), rnd(-10, 10), 4)
+                    debris(s.frame.maxX + 1, s.y - rnd(0, s.h[n - 1]), rnd(6, 30), rnd(-10, 10), 4)
                 }
             }
         }
@@ -317,6 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         let saved = UserDefaults.standard.double(forKey: "rate")
         if saved > 0 { sim.rate = CGFloat(saved) }
+        sim.solid = UserDefaults.standard.bool(forKey: "solid")
 
         let screen = NSScreen.screens[0]
         window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -447,6 +485,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             it.state = sim.rate == r.1 ? .on : .off
         }
         menu.addItem(.separator())
+        let solid = menu.addItem(withTitle: "Не засыпать содержимое окон", action: #selector(toggleSolid), keyEquivalent: "")
+        solid.state = sim.solid ? .on : .off
         menu.addItem(withTitle: "Стряхнуть весь снег", action: #selector(shake), keyEquivalent: "")
         let dock = menu.addItem(withTitle: "Снег на Dock (нужен Универсальный доступ)",
                                 action: #selector(askDock), keyEquivalent: "")
@@ -464,6 +504,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func setRate(_ sender: NSMenuItem) {
         sim.rate = rates[sender.tag].1
         UserDefaults.standard.set(Double(sim.rate), forKey: "rate")
+    }
+
+    @objc func toggleSolid() {
+        sim.solid.toggle()
+        UserDefaults.standard.set(sim.solid, forKey: "solid")
     }
 
     @objc func shake() { sim.dumpAll() }
