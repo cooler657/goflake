@@ -22,7 +22,9 @@ use crate::sky::Sky;
 use crate::soft::Canvas;
 
 pub const PHYSICAL: bool = false;
-pub const DOCK_LIFT: f32 = 5.0;
+/// Рамка Dock по Accessibility лежит на 4 pt выше видимой плашки (измерено по
+/// скриншоту: плашка на 901 pt, рамка на 897 pt), поэтому кромка опускается.
+pub const DOCK_LIFT: f32 = -4.0;
 
 type CFRef = *const c_void;
 
