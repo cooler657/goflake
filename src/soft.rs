@@ -8,6 +8,7 @@
 // нужен только тестам.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
+use crate::decor;
 use crate::look::{self, FEATHER_PX, FlakeShape, SHADOW_PX, SHADOW_RGB};
 use crate::sim::Sim;
 use crate::sky::Sky;
@@ -91,6 +92,12 @@ impl Canvas {
             for r in sim.window_rects() {
                 self.clear_rect(r.min_x() * scale, r.min_y() * scale, r.max_x() * scale, r.max_y() * scale);
             }
+        }
+        // украшения окон — после выреза, перед частицами
+        let mut decor_looks = Vec::new();
+        decor::looks(sim, &mut decor_looks);
+        for f in &decor_looks {
+            self.flake(f, scale);
         }
         for p in &sim.particles {
             self.flake(&look::flake(p), scale);

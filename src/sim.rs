@@ -158,6 +158,8 @@ pub struct Sim {
     /// Куда дует ветер и во сколько раз он сильнее обычного.
     pub wind_dir: WindDir,
     pub wind_force: f32,
+    /// Украшения на верхней кромке окон (деревья и т. п.).
+    pub decor: bool,
     solids: Vec<Rect>,
     t: f32,
     spawn_acc: f32,
@@ -233,6 +235,7 @@ impl Sim {
             solid: false,
             wind_dir: WindDir::Auto,
             wind_force: 1.0,
+            decor: true,
             solids: Vec::new(),
             t: 0.0,
             spawn_acc: 0.0,
@@ -397,7 +400,7 @@ impl Sim {
 
     /// `c` — положение курсора, `cv` — его скорость.
     pub fn step(&mut self, dt: f32, c: (f32, f32), cv: (f32, f32)) {
-        let Sim { w, h, particles, surfaces, kind, rate, solid, wind_dir, wind_force, solids, t, spawn_acc, rng } = self;
+        let Sim { w, h, particles, surfaces, kind, rate, solid, wind_dir, wind_force, decor: _, solids, t, spawn_acc, rng } = self;
         let (w, h, solid, kind, wind_dir, force) = (*w, *h, *solid, *kind, *wind_dir, *wind_force);
         // материал, который падает сейчас и из которого состоят кучи
         let mat = kind.material();

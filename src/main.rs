@@ -7,6 +7,7 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
 mod clock;
+mod decor;
 mod gfx;
 mod look;
 mod materials;
@@ -110,6 +111,7 @@ impl App {
             wind_force: self.settings.wind_force,
             rate: self.settings.rate,
             solid: self.settings.solid,
+            decor: self.settings.decor,
             dock: self.platform.dock_access(),
             gpu: self.overlay.as_ref().map_or(self.settings.gpu, |o| !o.gfx.software()),
             gpu_switchable: self.software_available,
@@ -306,6 +308,11 @@ impl App {
                 self.sim.solid = self.settings.solid;
                 self.settings.save();
             }
+            Cmd::Decor => {
+                self.settings.decor = !self.settings.decor;
+                self.sim.decor = self.settings.decor;
+                self.settings.save();
+            }
             Cmd::Shake => self.sim.dump_all(),
             Cmd::Gpu => {
                 if self.software_available {
@@ -387,6 +394,7 @@ fn main() {
     let mut sim = Sim::new(seed);
     sim.rate = RATES[settings.rate].1;
     sim.solid = settings.solid;
+    sim.decor = settings.decor;
     sim.wind_dir = settings.wind_dir();
     sim.wind_force = settings.wind_force_value();
     sim.set_kind(settings.kind());
@@ -422,6 +430,7 @@ fn main() {
             wind_force: settings.wind_force,
             rate: settings.rate,
             solid: settings.solid,
+            decor: settings.decor,
             dock: None,
             gpu: settings.gpu,
             gpu_switchable: false,

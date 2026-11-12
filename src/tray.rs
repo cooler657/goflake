@@ -24,6 +24,8 @@ pub enum Cmd {
     WindForce(usize),
     Rate(usize),
     Solid,
+    /// Показать или спрятать украшения на окнах.
+    Decor,
     Shake,
     /// Переключить аппаратное ускорение.
     Gpu,
@@ -44,6 +46,7 @@ pub struct MenuState {
     pub wind_force: usize,
     pub rate: usize,
     pub solid: bool,
+    pub decor: bool,
     /// `None` — пункта про Dock нет (разрешение не требуется).
     pub dock: Option<bool>,
     /// Отрисовка идёт на видеокарте.
@@ -60,6 +63,7 @@ const L_SKY: &str = "Небо";
 const L_WIND: &str = "Ветер";
 const L_RATE: &str = "Интенсивность";
 const L_SOLID: &str = "Не засыпать содержимое окон";
+const L_DECOR: &str = "Украшения на окнах (деревья, кактусы)";
 const L_SHAKE: &str = "Стряхнуть всё";
 const L_DOCK: &str = "Ложиться на Dock (нужен Универсальный доступ)";
 const L_GPU: &str = "Аппаратное ускорение (GPU)";
@@ -120,6 +124,7 @@ mod imp {
         forces: Vec<CheckMenuItem>,
         rates: Vec<CheckMenuItem>,
         solid: CheckMenuItem,
+        decor: CheckMenuItem,
         dock: Option<CheckMenuItem>,
         gpu: CheckMenuItem,
         adapter: MenuItem,
@@ -129,6 +134,7 @@ mod imp {
         Some(match id {
             "toggle" => Cmd::Toggle,
             "solid" => Cmd::Solid,
+            "decor" => Cmd::Decor,
             "shake" => Cmd::Shake,
             "gpu" => Cmd::Gpu,
             "dock" => Cmd::Dock,
@@ -211,6 +217,8 @@ mod imp {
                 menu.append(&sep())?;
                 let solid = CheckMenuItem::with_id("solid", L_SOLID, true, state.solid, None);
                 menu.append(&solid)?;
+                let decor = CheckMenuItem::with_id("decor", L_DECOR, true, state.decor, None);
+                menu.append(&decor)?;
                 menu.append(&MenuItem::with_id("shake", L_SHAKE, true, None))?;
                 let dock = match state.dock {
                     Some(ok) => {
@@ -228,9 +236,9 @@ mod imp {
                 menu.append(&adapter)?;
                 menu.append(&sep())?;
                 menu.append(&MenuItem::with_id("quit", L_QUIT, true, None))?;
-                Ok((menu, running, scenes, skies, places, winds, forces, rates, solid, dock, gpu, adapter))
+                Ok((menu, running, scenes, skies, places, winds, forces, rates, solid, decor, dock, gpu, adapter))
             };
-            let (menu, running, scenes, skies, places, winds, forces, rates, solid, dock, gpu, adapter) =
+            let (menu, running, scenes, skies, places, winds, forces, rates, solid, decor, dock, gpu, adapter) =
                 build().map_err(|e| e.to_string())?;
 
             MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
@@ -249,7 +257,7 @@ mod imp {
             let builder = builder.with_icon(icon([205, 230, 255])?);
             let tray = builder.build().map_err(|e| e.to_string())?;
 
-            Ok(Self { _icon: tray, running, scenes, skies, places, winds, forces, rates, solid, dock, gpu, adapter })
+            Ok(Self { _icon: tray, running, scenes, skies, places, winds, forces, rates, solid, decor, dock, gpu, adapter })
         }
 
         /// Приводит галочки в соответствие с состоянием приложения.
@@ -265,6 +273,7 @@ mod imp {
             check(&self.forces, state.wind_force);
             check(&self.rates, state.rate);
             self.solid.set_checked(state.solid);
+            self.decor.set_checked(state.decor);
             if let (Some(item), Some(ok)) = (&self.dock, state.dock) {
                 item.set_checked(ok);
             }
@@ -359,6 +368,13 @@ mod imp {
                     label: L_SOLID.into(),
                     checked: s.solid,
                     activate: Box::new(|m: &mut Self| m.send(Cmd::Solid)),
+                    ..Default::default()
+                }
+                .into(),
+                CheckmarkItem {
+                    label: L_DECOR.into(),
+                    checked: s.decor,
+                    activate: Box::new(|m: &mut Self| m.send(Cmd::Decor)),
                     ..Default::default()
                 }
                 .into(),

@@ -64,13 +64,15 @@ pub struct Settings {
     pub wind_force: usize,
     /// Режим «не засыпать содержимое окон».
     pub solid: bool,
+    /// Украшения на верхней кромке окон.
+    pub decor: bool,
     /// Аппаратное ускорение: рисовать на видеокарте, а не программно.
     pub gpu: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { rate: 1, scene: 0, sky: 1, sky_place: 2, wind: 0, wind_force: 1, solid: false, gpu: true }
+        Self { rate: 1, scene: 0, sky: 1, sky_place: 2, wind: 0, wind_force: 1, solid: false, decor: true, gpu: true }
     }
 }
 
@@ -115,6 +117,7 @@ impl Settings {
                     }
                 }
                 ("solid", v) => s.solid = v == "1" || v == "true",
+                ("decor", v) => s.decor = v != "0" && v != "false",
                 ("gpu", v) => s.gpu = v != "0" && v != "false",
                 _ => {}
             }
@@ -132,7 +135,7 @@ impl Settings {
             let _ = fs::create_dir_all(dir);
         }
         let text =
-            format!("rate={}\nscene={}\nsky={}\nsky_place={}\nwind={}\nwind_force={}\nsolid={}\ngpu={}\n",
+            format!("rate={}\nscene={}\nsky={}\nsky_place={}\nwind={}\nwind_force={}\nsolid={}\ndecor={}\ngpu={}\n",
                 self.rate,
                 self.scene,
                 self.sky,
@@ -140,6 +143,7 @@ impl Settings {
                 self.wind,
                 self.wind_force,
                 self.solid as u8,
+                self.decor as u8,
                 self.gpu as u8
             );
         let _ = fs::write(p, text);
@@ -178,12 +182,12 @@ mod tests {
     #[test]
     fn parses_and_ignores_garbage() {
         assert_eq!(
-            Settings::parse("rate=2\nscene=3\nsky=2\nsky_place=1\nwind=2\nwind_force=3\nsolid=1\ngpu=0\n"),
-            Settings { rate: 2, scene: 3, sky: 2, sky_place: 1, wind: 2, wind_force: 3, solid: true, gpu: false }
+            Settings::parse("rate=2\nscene=3\nsky=2\nsky_place=1\nwind=2\nwind_force=3\nsolid=1\ndecor=0\ngpu=0\n"),
+            Settings { rate: 2, scene: 3, sky: 2, sky_place: 1, wind: 2, wind_force: 3, solid: true, decor: false, gpu: false }
         );
         assert_eq!(
             Settings::parse("rate=99\nчто-то\nscene=99\nsky=99\nsky_place=99\nwind=99\nwind_force=99\nsolid=0"),
-            Settings { rate: 2, scene: 5, sky: 3, sky_place: 2, wind: 3, wind_force: 3, solid: false, gpu: true }
+            Settings { rate: 2, scene: 5, sky: 3, sky_place: 2, wind: 3, wind_force: 3, solid: false, decor: true, gpu: true }
         );
         assert_eq!(Settings::parse(""), Settings::default());
     }

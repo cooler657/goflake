@@ -18,6 +18,24 @@ pub enum Kind {
 
 pub const KINDS: [Kind; 5] = [Kind::Snow, Kind::Rain, Kind::Sand, Kind::Leaves, Kind::Dust];
 
+/// Что стоит на верхней кромке окон при этом материале.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Decor {
+    /// Ничего.
+    #[allow(dead_code)]
+    None,
+    /// Ёлки со снегом на ветках.
+    Fir,
+    /// Деревья с зелёной кроной и цветами.
+    Leafy,
+    /// Кактусы.
+    Cactus,
+    /// Голые деревья.
+    Bare,
+    /// Камни.
+    Rocks,
+}
+
 /// Форма частицы при отрисовке.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
@@ -107,6 +125,8 @@ pub struct Material {
     /// Дымка на весь экран: цвет и наибольшая прозрачность (0 — дымки нет).
     /// Прозрачность медленно «дышит». Окна не затемняются: дымка за ними.
     pub haze: [f32; 4],
+    /// Украшения на кромке окон.
+    pub decor: Decor,
 }
 
 const SNOW: Material = Material {
@@ -145,6 +165,7 @@ const SNOW: Material = Material {
     streak: 0.0,
     side_spawn: 0.0,
     haze: [0.0; 4],
+    decor: Decor::Fir,
 };
 
 /// Капли быстрые и тонкие; вода растекается ровным слоем, стекает с краёв и высыхает.
@@ -184,6 +205,7 @@ const RAIN: Material = Material {
     streak: 0.007,
     side_spawn: 0.0,
     haze: [0.0; 4],
+    decor: Decor::Leafy,
 };
 
 /// Песчинки мелкие и тяжёлые, их сильно несёт ветром; куча держит крутой склон.
@@ -223,6 +245,7 @@ const SAND: Material = Material {
     streak: 0.0,
     side_spawn: 0.0,
     haze: [0.0; 4],
+    decor: Decor::Cactus,
 };
 
 /// Листья крупные и лёгкие: падают медленно, порхают и кружатся, лежат рыхлым слоем.
@@ -268,6 +291,7 @@ const LEAVES: Material = Material {
     streak: 0.0,
     side_spawn: 0.0,
     haze: [0.0; 4],
+    decor: Decor::Bare,
 };
 
 /// Пыль Марса: мелкая, быстрая и всегда боком. Ветер почти постоянный и порывистый,
@@ -309,6 +333,7 @@ const DUST: Material = Material {
     streak: 0.035,
     side_spawn: 0.7,
     haze: [0.85, 0.42, 0.22, 0.18],
+    decor: Decor::Rocks,
 };
 
 impl Kind {
