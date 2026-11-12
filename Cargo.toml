@@ -35,6 +35,9 @@ windows-sys = { version = "0.61", features = [
 ksni = { version = "0.3", features = ["blocking"] }
 x11rb = "0.14"
 
+[target."cfg(windows)".build-dependencies]
+winresource = "0.1.34"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

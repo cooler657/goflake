@@ -135,6 +135,31 @@ open dist/Snowdrift.app
 поддержкой EWMH — это любой распространённый рабочий стол. Для значка в трее
 нужна поддержка StatusNotifierItem (в GNOME — расширение AppIndicator).
 
+### Значок приложения
+
+Белая снежинка на вечернем небе с сугробом внизу. Он нарисован скриптом
+`tools/make_icon.py` без внешних библиотек, а `tools/build_icons.sh` делает из
+него остальные форматы (нужны macOS-инструменты `sips` и `iconutil`):
+
+| Файл | Куда идёт |
+| --- | --- |
+| `assets/Snowdrift.icns` | macOS: кладётся в `Snowdrift.app` скриптом `bundle-macos.sh` |
+| `assets/icon.ico` | Windows: встраивается в `snowdrift.exe` при сборке (`build.rs`) |
+| `assets/snowdrift-256.png`, `assets/snowdrift.desktop` | Linux: лежат в архиве релиза рядом с бинарником |
+
+Чтобы поставить приложение в меню программ в Linux:
+
+```sh
+mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons/hicolor/256x256/apps
+cp snowdrift ~/.local/bin/
+cp snowdrift.desktop ~/.local/share/applications/
+cp snowdrift-256.png ~/.local/share/icons/hicolor/256x256/apps/snowdrift.png
+```
+
+Значок в трее и строке меню — другой, одноцветный: он рисуется в коде
+(`src/tray.rs`), чтобы macOS могла перекрашивать его под светлую и тёмную
+строку меню.
+
 ### Готовые сборки и релизы
 
 Сборка и тесты под все три системы идут в GitHub Actions
@@ -149,7 +174,7 @@ git push origin v0.3.0
 Actions соберёт приложение на macOS, Windows и Linux, упакует и приложит к
 новому релизу на GitHub: `Snowdrift-macos-arm64.zip` (приложение
 `Snowdrift.app`), `Snowdrift-windows-x64.zip` (`snowdrift.exe`) и
-`Snowdrift-linux-x64.tar.gz`. Описание релиза создаётся из коммитов. Перед
+`Snowdrift-linux-x64.tar.gz` (бинарник, значок и файл `.desktop`). Описание релиза создаётся из коммитов. Перед
 тегом версию в `Cargo.toml` стоит поднять до той же.
 
 Файлы не подписаны сертификатом разработчика, поэтому системы предупредят:

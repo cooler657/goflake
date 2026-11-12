@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Сугроб
+Name[en]=Snowdrift
+Comment=Снег, дождь, песок и листья поверх рабочего стола
+Comment[en]=Snow, rain, sand and leaves over your desktop
+Exec=snowdrift
+Icon=snowdrift
+Terminal=false
+Categories=Utility;
