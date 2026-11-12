@@ -1,4 +1,4 @@
-//! Сугроб — снег поверх рабочего стола.
+//! Сугроб — снег, дождь, песок и листья поверх рабочего стола.
 //!
 //! Прозрачное окно на весь основной экран, пропускающее клики. Физика — в `sim`,
 //! отрисовка на GPU — в `render`, всё зависящее от ОС — в `platform` и `tray`.
@@ -6,6 +6,7 @@
 // В релизной сборке под Windows не открываем окно консоли.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
+mod materials;
 mod platform;
 mod render;
 mod settings;
@@ -65,6 +66,8 @@ struct App {
     overlay: Option<Overlay>,
     tray: Option<Tray>,
     menu: MenuState,
+    /// Есть ли программный адаптер, на который можно переключиться.
+    software_available: bool,
     running: bool,
     last_frame: Option<Instant>,
     last_mouse: Option<(f32, f32)>,
@@ -93,9 +96,13 @@ impl App {
     fn menu_state(&self) -> MenuState {
         MenuState {
             running: self.running,
+            scene: self.settings.scene,
             rate: self.settings.rate,
             solid: self.settings.solid,
             dock: self.platform.dock_access(),
+            gpu: self.overlay.as_ref().map_or(self.settings.gpu, |o| !o.gfx.software),
+            gpu_switchable: self.software_available,
+            adapter: self.overlay.as_ref().map_or_else(String::new, |o| o.gfx.adapter.clone()),
         }
     }
 
@@ -104,7 +111,7 @@ impl App {
         if state != self.menu {
             self.menu = state;
             if let Some(tray) = &self.tray {
-                tray.sync(state);
+                tray.sync(&self.menu);
             }
         }
     }
@@ -130,8 +137,12 @@ impl App {
         }
         platform::configure_window(&window);
 
-        let gfx = Renderer::new(window.clone(), el.owned_display_handle())?;
+        let gfx = Renderer::new(window.clone(), el.owned_display_handle(), self.settings.gpu)?;
         eprintln!("сугроб: GPU — {}", gfx.info);
+        eprintln!(
+            "сугроб: программная отрисовка {}",
+            if self.software_available { "доступна" } else { "недоступна — переключатель в меню отключён" }
+        );
         let mut overlay = Overlay { window, gfx, origin: (pos.x as f32, pos.y as f32), scale: 1.0 };
         self.apply_size(&mut overlay);
         Ok(overlay)
@@ -144,6 +155,32 @@ impl App {
         overlay.gfx.resize(size.width, size.height);
         self.sim.w = size.width as f32 / overlay.scale;
         self.sim.h = size.height as f32 / overlay.scale;
+    }
+
+    /// Пересоздаёт отрисовку после переключения аппаратного ускорения.
+    fn rebuild_renderer(&mut self, el: &ActiveEventLoop) {
+        let Some(Overlay { window, gfx, origin, scale }) = self.overlay.take() else { return };
+        // старую поверхность нужно освободить до создания новой на том же окне
+        drop(gfx);
+        let display = el.owned_display_handle();
+        let gfx = Renderer::new(window.clone(), display.clone(), self.settings.gpu).or_else(|e| {
+            eprintln!("сугроб: не удалось переключить отрисовку ({e}), возвращаю прежнюю");
+            self.settings.gpu = !self.settings.gpu;
+            Renderer::new(window.clone(), display, self.settings.gpu)
+        });
+        match gfx {
+            Ok(gfx) => {
+                eprintln!("сугроб: GPU — {}", gfx.info);
+                let mut overlay = Overlay { window, gfx, origin, scale };
+                self.apply_size(&mut overlay);
+                overlay.window.request_redraw();
+                self.overlay = Some(overlay);
+            }
+            Err(e) => {
+                eprintln!("сугроб: {e}");
+                el.exit();
+            }
+        }
     }
 
     /// Редкие проверки: Dock, смена разрешения экрана, галочки в меню.
@@ -160,6 +197,8 @@ impl App {
             let bottom = r.w > r.h && r.min_y() < self.sim.h - 10.0 && r.max_y() > self.sim.h - 150.0;
             bottom.then(|| Rect::new(r.x, r.y - platform::DOCK_LIFT, r.w, r.h + platform::DOCK_LIFT))
         });
+        // в режиме «по времени года» материал меняется вместе с календарём
+        self.sim.set_kind(self.settings.kind());
         self.sync_menu();
     }
 
@@ -220,6 +259,11 @@ impl App {
                     }
                 }
             }
+            Cmd::Scene(i) => {
+                self.settings.scene = i.min(settings::SCENES - 1);
+                self.sim.set_kind(self.settings.kind());
+                self.settings.save();
+            }
             Cmd::Rate(i) => {
                 self.settings.rate = i.min(RATES.len() - 1);
                 self.sim.rate = RATES[self.settings.rate].1;
@@ -231,13 +275,20 @@ impl App {
                 self.settings.save();
             }
             Cmd::Shake => self.sim.dump_all(),
+            Cmd::Gpu => {
+                if self.software_available {
+                    self.settings.gpu = !self.settings.gpu;
+                    self.rebuild_renderer(el);
+                    self.settings.save();
+                }
+            }
             Cmd::Dock => self.platform.request_dock_access(),
             Cmd::Quit => el.exit(),
         }
         // галочки ставим сами: на разных ОС меню ведёт себя по-разному
         self.menu = self.menu_state();
         if let Some(tray) = &self.tray {
-            tray.sync(self.menu);
+            tray.sync(&self.menu);
         }
     }
 }
@@ -259,7 +310,7 @@ impl ApplicationHandler<Cmd> for App {
             }
         }
         self.menu = self.menu_state();
-        match Tray::new(self.proxy.clone(), self.menu) {
+        match Tray::new(self.proxy.clone(), &self.menu) {
             Ok(tray) => self.tray = Some(tray),
             Err(e) => eprintln!("сугроб: значок в трее недоступен ({e}); завершить приложение можно через диспетчер задач"),
         }
@@ -304,6 +355,7 @@ fn main() {
     let mut sim = Sim::new(seed);
     sim.rate = RATES[settings.rate].1;
     sim.solid = settings.solid;
+    sim.set_kind(settings.kind());
 
     let mut builder = EventLoop::<Cmd>::with_user_event();
     platform::configure_event_loop(&mut builder);
@@ -322,7 +374,17 @@ fn main() {
         platform,
         overlay: None,
         tray: None,
-        menu: MenuState { running: true, rate: settings.rate, solid: settings.solid, dock: None },
+        menu: MenuState {
+            running: true,
+            scene: settings.scene,
+            rate: settings.rate,
+            solid: settings.solid,
+            dock: None,
+            gpu: settings.gpu,
+            gpu_switchable: false,
+            adapter: String::new(),
+        },
+        software_available: Renderer::software_available(),
         running: true,
         last_frame: None,
         last_mouse: None,

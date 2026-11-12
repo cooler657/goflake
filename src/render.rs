@@ -5,6 +5,7 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
+use crate::materials::Shape;
 use crate::sim::{COL_W, MAX_PARTICLES, Sim};
 
 #[repr(C)]
@@ -19,8 +20,12 @@ struct Globals {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Flake {
     center: [f32; 2],
-    radius: f32,
-    alpha: f32,
+    /// Полуразмеры вдоль и поперёк собственной оси, точки.
+    half: [f32; 2],
+    rotation: f32,
+    /// 0 — крупинка или штрих, 1 — лист.
+    shape: f32,
+    color: [f32; 4],
 }
 
 #[repr(C)]
@@ -30,11 +35,18 @@ struct PileVertex {
     color: [f32; 4],
 }
 
-/// Прозрачность слоёв снежинок: дальний, средний, ближний.
+/// Прозрачность слоёв частиц: дальний, средний, ближний.
 const LAYER_ALPHA: [f32; 3] = [0.45, 0.7, 0.95];
-const PILE_TOP: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-const PILE_BASE: [f32; 4] = [0.84, 0.90, 1.0, 1.0];
-const SHADOW: [f32; 4] = [0.1, 0.2, 0.4, 0.28];
+const SHADOW_RGB: [f32; 3] = [0.1, 0.2, 0.4];
+
+/// Псевдослучайное число от 0 до 1 по целому — для пёстрых куч.
+fn hash01(n: u32) -> f32 {
+    let mut x = n.wrapping_mul(0x9E37_79B1);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x85EB_CA6B);
+    x ^= x >> 13;
+    (x & 0xFFFF) as f32 / 65_535.0
+}
 
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
@@ -51,12 +63,31 @@ pub struct Renderer {
     pile_cap: u64,
     flakes: Vec<Flake>,
     pile: Vec<PileVertex>,
-    /// Описание выбранного GPU — для журнала и диагностики.
+    /// Подробное описание выбранного адаптера — для журнала и диагностики.
     pub info: String,
+    /// Короткое название адаптера — для меню.
+    pub adapter: String,
+    /// Отрисовка идёт программно, на процессоре.
+    pub software: bool,
 }
 
 impl Renderer {
-    pub fn new(window: Arc<Window>, display: winit::event_loop::OwnedDisplayHandle) -> Result<Self, String> {
+    /// Есть ли в системе программный адаптер, на который можно переключиться.
+    /// На macOS его нет: Metal работает только на GPU.
+    pub fn software_available() -> bool {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
+            .iter()
+            .any(|a| a.get_info().device_type == wgpu::DeviceType::Cpu)
+    }
+
+    /// `prefer_gpu` — сначала пробовать видеокарту (иначе — программный адаптер).
+    /// Если предпочтительного варианта нет, берётся другой.
+    pub fn new(
+        window: Arc<Window>,
+        display: winit::event_loop::OwnedDisplayHandle,
+        prefer_gpu: bool,
+    ) -> Result<Self, String> {
         let size = window.inner_size();
 
         // На Windows прозрачное окно умеет только DirectX 12 с цепочкой кадров через
@@ -79,8 +110,8 @@ impl Renderer {
                     continue;
                 }
             };
-            // Снегу хватает встроенной графики; если GPU нет вовсе — программный адаптер.
-            for fallback in [false, true] {
+            // Осадкам хватает встроенной графики; если GPU нет вовсе — программный адаптер.
+            for fallback in [!prefer_gpu, prefer_gpu] {
                 let opts = wgpu::RequestAdapterOptions {
                     power_preference: wgpu::PowerPreference::LowPower,
                     force_fallback_adapter: fallback,
@@ -89,18 +120,18 @@ impl Renderer {
                 };
                 match pollster::block_on(instance.request_adapter(&opts)) {
                     Ok(adapter) => {
-                        picked = Some((adapter, fallback));
+                        picked = Some(adapter);
                         break;
                     }
                     Err(e) => last_err = format!("адаптер не найден: {e}"),
                 }
             }
-            if let Some((adapter, fallback)) = picked.take() {
-                found = Some((surface, adapter, fallback));
+            if let Some(adapter) = picked.take() {
+                found = Some((surface, adapter));
                 break;
             }
         }
-        let Some((surface, adapter, fallback)) = found else { return Err(last_err) };
+        let Some((surface, adapter)) = found else { return Err(last_err) };
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("snowdrift"),
@@ -135,12 +166,14 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let ai = adapter.get_info();
+        let software = ai.device_type == wgpu::DeviceType::Cpu;
+        let short = format!("{} · {:?}", ai.name, ai.backend);
         let info = format!(
             "{} ({:?}, {:?}{}), формат {:?}, альфа {:?}",
             ai.name,
             ai.backend,
             ai.device_type,
-            if fallback { ", программный" } else { "" },
+            if software { ", программный" } else { "" },
             config.format,
             config.alpha_mode
         );
@@ -217,7 +250,7 @@ impl Renderer {
             wgpu::VertexBufferLayout {
                 array_stride: size_of::<Flake>() as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
+                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x4],
             },
         );
         let pile_pipeline = pipeline(
@@ -256,6 +289,8 @@ impl Renderer {
             flakes: Vec::with_capacity(MAX_PARTICLES),
             pile: Vec::new(),
             info,
+            adapter: short,
+            software,
         })
     }
 
@@ -277,19 +312,31 @@ impl Renderer {
         self.surface.configure(&self.device, &self.config);
     }
 
-    /// Строит сетку сугробов: тень над кромкой, тело, сглаживающая полоска.
+    /// Строит сетку куч: тень над кромкой, сглаживающая полоска, тело.
     fn build_piles(&mut self, sim: &Sim, scale: f32) {
         self.pile.clear();
+        let mat = sim.kind().material();
         let px = 1.0 / scale;
+        let shadow = [SHADOW_RGB[0], SHADOW_RGB[1], SHADOW_RGB[2], mat.pile_shadow];
         let clear = |c: [f32; 4]| [c[0], c[1], c[2], 0.0];
-        let mut quad = |a: ([f32; 2], [f32; 4]), b: ([f32; 2], [f32; 4]), c: ([f32; 2], [f32; 4]), d: ([f32; 2], [f32; 4])| {
+        type V = ([f32; 2], [f32; 4]);
+        let mut quad = |a: V, b: V, c: V, d: V| {
             for (pos, color) in [a, b, c, c, b, d] {
                 self.pile.push(PileVertex { pos, color });
             }
         };
-        for s in sim.surfaces.values() {
+        for (id, s) in sim.surfaces.iter() {
             let n = s.h.len();
             let base = s.y + 0.5;
+            let seed = (*id as u32).wrapping_mul(7919);
+            // цвета верха и низа кучи в точке контура; у листьев — пятнами по палитре
+            let colors = |k: usize| -> ([f32; 4], [f32; 4]) {
+                if !mat.pile_mottled {
+                    return (mat.pile_top, mat.pile_base);
+                }
+                let c = mat.colors[(hash01(seed ^ (k as u32 / 3)) * mat.colors.len() as f32) as usize % mat.colors.len()];
+                ([c[0], c[1], c[2], 1.0], [c[0] * 0.7, c[1] * 0.7, c[2] * 0.7, 1.0])
+            };
             let mut i = 0;
             while i < n {
                 if !(s.vis[i] && s.h[i] > 0.15) {
@@ -300,34 +347,36 @@ impl Renderer {
                 while j < n && s.vis[j] && s.h[j] > 0.15 {
                     j += 1;
                 }
-                // контур участка: (x, верх сугроба); на концах высота сходит к нулю
-                let mut prev = (s.x0 + i as f32 * COL_W, s.y);
+                // контур участка: (x, верх кучи); на концах высота сходит к нулю
+                let mut prev = (s.x0 + i as f32 * COL_W, s.y, colors(i));
                 for k in i..=j {
                     let cur = if k == j {
-                        (s.x0 + j as f32 * COL_W, s.y)
+                        (s.x0 + j as f32 * COL_W, s.y, colors(j))
                     } else {
                         let l = if k > i { s.h[k - 1] } else { 0.0 };
                         let r = if k + 1 < j { s.h[k + 1] } else { 0.0 };
-                        (s.x0 + (k as f32 + 0.5) * COL_W, s.y - (l + 2.0 * s.h[k] + r) / 4.0)
+                        let mut top = (l + 2.0 * s.h[k] + r) / 4.0;
+                        if mat.pile_mottled {
+                            // торчащие листья: неровная кромка
+                            top += (hash01(seed ^ (k as u32).wrapping_mul(31)) - 0.3) * top.min(3.0);
+                        }
+                        (s.x0 + (k as f32 + 0.5) * COL_W, s.y - top.max(0.0), colors(k))
                     };
-                    let (x0, t0) = prev;
-                    let (x1, t1) = cur;
-                    // мягкая тень над снегом — чтобы он читался на светлом фоне
-                    quad(
-                        ([x0, t0 - 3.5 * px], clear(SHADOW)),
-                        ([x1, t1 - 3.5 * px], clear(SHADOW)),
-                        ([x0, t0], SHADOW),
-                        ([x1, t1], SHADOW),
-                    );
+                    let (x0, t0, (top0, base0)) = prev;
+                    let (x1, t1, (top1, base1)) = cur;
+                    if mat.pile_shadow > 0.0 {
+                        // мягкая тень над кучей — чтобы она читалась на светлом фоне
+                        quad(
+                            ([x0, t0 - 3.5 * px], clear(shadow)),
+                            ([x1, t1 - 3.5 * px], clear(shadow)),
+                            ([x0, t0], shadow),
+                            ([x1, t1], shadow),
+                        );
+                    }
                     // сглаживание верхней кромки
-                    quad(
-                        ([x0, t0 - 1.5 * px], clear(PILE_TOP)),
-                        ([x1, t1 - 1.5 * px], clear(PILE_TOP)),
-                        ([x0, t0], PILE_TOP),
-                        ([x1, t1], PILE_TOP),
-                    );
-                    // тело сугроба
-                    quad(([x0, t0], PILE_TOP), ([x1, t1], PILE_TOP), ([x0, base], PILE_BASE), ([x1, base], PILE_BASE));
+                    quad(([x0, t0 - 1.5 * px], clear(top0)), ([x1, t1 - 1.5 * px], clear(top1)), ([x0, t0], top0), ([x1, t1], top1));
+                    // тело кучи
+                    quad(([x0, t0], top0), ([x1, t1], top1), ([x0, base], base0), ([x1, base], base1));
                     prev = cur;
                 }
                 i = j;
@@ -348,10 +397,21 @@ impl Renderer {
         };
 
         self.flakes.clear();
-        self.flakes.extend(sim.particles.iter().take(MAX_PARTICLES).map(|p| Flake {
-            center: [p.x, p.y],
-            radius: p.r,
-            alpha: LAYER_ALPHA[p.layer.min(2) as usize],
+        self.flakes.extend(sim.particles.iter().take(MAX_PARTICLES).map(|p| {
+            let m = p.kind.material();
+            let c = m.colors[p.tint as usize % m.colors.len()];
+            let color = [c[0], c[1], c[2], LAYER_ALPHA[p.layer.min(2) as usize] * m.alpha];
+            let (half, rotation, shape) = match m.shape {
+                Shape::Dot => ([p.r, p.r], 0.0, 0.0),
+                Shape::Streak => {
+                    // штрих вытянут вдоль скорости: чем быстрее капля, тем он длиннее
+                    let speed = (p.vx * p.vx + p.vy * p.vy).sqrt();
+                    let radius = (p.r * 0.4).max(0.4);
+                    ([radius + (speed * 0.007).clamp(1.0, 7.0), radius], p.vy.atan2(p.vx), 0.0)
+                }
+                Shape::Leaf => ([p.r, p.r * 0.5], p.angle, 1.0),
+            };
+            Flake { center: [p.x, p.y], half, rotation, shape, color }
         }));
         self.build_piles(sim, scale);
 

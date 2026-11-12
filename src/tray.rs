@@ -6,15 +6,19 @@
 
 use winit::event_loop::EventLoopProxy;
 
-use crate::settings::RATES;
+use crate::settings::{RATES, SCENES, scene_label};
 
 /// Команда из меню. Она же — пользовательское событие цикла событий.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Cmd {
     Toggle,
+    /// Что падает: 0 — по времени года, дальше материалы.
+    Scene(usize),
     Rate(usize),
     Solid,
     Shake,
+    /// Переключить аппаратное ускорение.
+    Gpu,
     /// Запросить доступ к Dock (пункт есть только на macOS).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Dock,
@@ -22,19 +26,27 @@ pub enum Cmd {
 }
 
 /// То, что меню должно показывать галочками.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MenuState {
     pub running: bool,
+    pub scene: usize,
     pub rate: usize,
     pub solid: bool,
     /// `None` — пункта про Dock нет (разрешение не требуется).
     pub dock: Option<bool>,
+    /// Отрисовка идёт на видеокарте.
+    pub gpu: bool,
+    /// Можно ли переключаться между видеокартой и программной отрисовкой.
+    pub gpu_switchable: bool,
+    /// Название используемого графического адаптера.
+    pub adapter: String,
 }
 
-const L_RUNNING: &str = "Снег идёт";
+const L_RUNNING: &str = "Включено";
 const L_SOLID: &str = "Не засыпать содержимое окон";
-const L_SHAKE: &str = "Стряхнуть весь снег";
-const L_DOCK: &str = "Снег на Dock (нужен Универсальный доступ)";
+const L_SHAKE: &str = "Стряхнуть всё";
+const L_DOCK: &str = "Ложиться на Dock (нужен Универсальный доступ)";
+const L_GPU: &str = "Аппаратное ускорение (GPU)";
 const L_QUIT: &str = "Выйти";
 
 /// Рисует снежинку: шесть лучей с веточками. Возвращает RGBA, `size`×`size`.
@@ -83,9 +95,12 @@ mod imp {
     pub struct Tray {
         _icon: TrayIcon,
         running: CheckMenuItem,
+        scenes: Vec<CheckMenuItem>,
         rates: Vec<CheckMenuItem>,
         solid: CheckMenuItem,
         dock: Option<CheckMenuItem>,
+        gpu: CheckMenuItem,
+        adapter: MenuItem,
     }
 
     fn command(id: &str) -> Option<Cmd> {
@@ -93,21 +108,32 @@ mod imp {
             "toggle" => Cmd::Toggle,
             "solid" => Cmd::Solid,
             "shake" => Cmd::Shake,
+            "gpu" => Cmd::Gpu,
             "dock" => Cmd::Dock,
             "quit" => Cmd::Quit,
-            _ => Cmd::Rate(id.strip_prefix("rate")?.parse().ok()?),
+            _ => match id.strip_prefix("scene") {
+                Some(i) => Cmd::Scene(i.parse().ok()?),
+                None => Cmd::Rate(id.strip_prefix("rate")?.parse().ok()?),
+            },
         })
     }
 
     impl Tray {
         /// Создавать нужно в главном потоке после запуска цикла событий.
-        pub fn new(proxy: EventLoopProxy<Cmd>, state: MenuState) -> Result<Self, String> {
+        pub fn new(proxy: EventLoopProxy<Cmd>, state: &MenuState) -> Result<Self, String> {
             let err = |e: tray_icon::menu::Error| e.to_string();
             let menu = Menu::new();
             let sep = PredefinedMenuItem::separator;
 
             let running = CheckMenuItem::with_id("toggle", L_RUNNING, true, state.running, None);
             menu.append(&running).map_err(err)?;
+            menu.append(&sep()).map_err(err)?;
+            let mut scenes = Vec::new();
+            for i in 0..SCENES {
+                let item = CheckMenuItem::with_id(format!("scene{i}"), scene_label(i), true, state.scene == i, None);
+                menu.append(&item).map_err(err)?;
+                scenes.push(item);
+            }
             menu.append(&sep()).map_err(err)?;
             let mut rates = Vec::new();
             for (i, (label, _)) in RATES.iter().enumerate() {
@@ -128,6 +154,12 @@ mod imp {
                 None => None,
             };
             menu.append(&sep()).map_err(err)?;
+            let gpu = CheckMenuItem::with_id("gpu", L_GPU, state.gpu_switchable, state.gpu, None);
+            menu.append(&gpu).map_err(err)?;
+            // строка только для сведения: какой адаптер сейчас рисует
+            let adapter = MenuItem::with_id("adapter", &state.adapter, false, None);
+            menu.append(&adapter).map_err(err)?;
+            menu.append(&sep()).map_err(err)?;
             menu.append(&MenuItem::with_id("quit", L_QUIT, true, None)).map_err(err)?;
 
             MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
@@ -146,12 +178,18 @@ mod imp {
             let builder = builder.with_icon(icon([205, 230, 255])?);
             let tray = builder.build().map_err(|e| e.to_string())?;
 
-            Ok(Self { _icon: tray, running, rates, solid, dock })
+            Ok(Self { _icon: tray, running, scenes, rates, solid, dock, gpu, adapter })
         }
 
         /// Приводит галочки в соответствие с состоянием приложения.
-        pub fn sync(&self, state: MenuState) {
+        pub fn sync(&self, state: &MenuState) {
+            self.gpu.set_checked(state.gpu);
+            self.gpu.set_enabled(state.gpu_switchable);
+            self.adapter.set_text(&state.adapter);
             self.running.set_checked(state.running);
+            for (i, item) in self.scenes.iter().enumerate() {
+                item.set_checked(state.scene == i);
+            }
             for (i, item) in self.rates.iter().enumerate() {
                 item.set_checked(state.rate == i);
             }
@@ -213,6 +251,15 @@ mod imp {
                 .into(),
                 MenuItem::Separator,
                 RadioGroup {
+                    selected: self.state.scene,
+                    select: Box::new(|m: &mut Self, i| m.send(Cmd::Scene(i))),
+                    options: (0..SCENES)
+                        .map(|i| RadioItem { label: scene_label(i).into(), ..Default::default() })
+                        .collect(),
+                }
+                .into(),
+                MenuItem::Separator,
+                RadioGroup {
                     selected: self.state.rate,
                     select: Box::new(|m: &mut Self, i| m.send(Cmd::Rate(i))),
                     options: RATES
@@ -236,6 +283,16 @@ mod imp {
                 }
                 .into(),
                 MenuItem::Separator,
+                CheckmarkItem {
+                    label: L_GPU.into(),
+                    checked: self.state.gpu,
+                    enabled: self.state.gpu_switchable,
+                    activate: Box::new(|m: &mut Self| m.send(Cmd::Gpu)),
+                    ..Default::default()
+                }
+                .into(),
+                StandardItem { label: self.state.adapter.clone(), enabled: false, ..Default::default() }.into(),
+                MenuItem::Separator,
                 StandardItem {
                     label: L_QUIT.into(),
                     activate: Box::new(|m: &mut Self| m.send(Cmd::Quit)),
@@ -251,14 +308,16 @@ mod imp {
     }
 
     impl Tray {
-        pub fn new(proxy: EventLoopProxy<Cmd>, state: MenuState) -> Result<Self, String> {
+        pub fn new(proxy: EventLoopProxy<Cmd>, state: &MenuState) -> Result<Self, String> {
+            let state = state.clone();
             let _ = L_DOCK; // на Linux панель видна без разрешений, пункт не нужен
             let handle = Model { proxy, state }.spawn().map_err(|e| e.to_string())?;
             Ok(Self { handle })
         }
 
-        pub fn sync(&self, state: MenuState) {
-            self.handle.update(|m: &mut Model| m.state = state);
+        pub fn sync(&self, state: &MenuState) {
+            let state = state.clone();
+            self.handle.update(move |m: &mut Model| m.state = state);
         }
     }
 }

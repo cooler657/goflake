@@ -1,15 +1,15 @@
-//! Физика снега. Не зависит ни от ОС, ни от отрисовки.
+//! Физика осадков. Не зависит ни от ОС, ни от отрисовки.
 //!
-//! Координаты: логические точки, начало в левом верхнем углу экрана, y вниз.
+//! Одна и та же физика для всех материалов; чем они отличаются, описано в
+//! `materials.rs`. Координаты: логические точки, начало в левом верхнем углу
+//! экрана, y вниз.
 
 use std::collections::HashMap;
 
-/// Ширина столбика сугроба.
+use crate::materials::Kind;
+
+/// Ширина столбика кучи.
 pub const COL_W: f32 = 2.0;
-/// Предел высоты сугроба.
-pub const MAX_PILE: f32 = 18.0;
-/// Максимальный перепад между соседними столбиками (угол осыпания).
-pub const SLOPE: f32 = 1.4;
 /// Радиус «лопаты» курсора.
 pub const CURSOR_R: f32 = 12.0;
 /// Потолок числа частиц.
@@ -67,6 +67,14 @@ pub struct Particle {
     /// 0 — дальний … 2 — ближний.
     pub layer: u8,
     pub phase: f32,
+    pub kind: Kind,
+    /// Номер цвета из палитры материала.
+    pub tint: u8,
+    /// Поворот и скорость вращения (для листьев).
+    pub angle: f32,
+    pub spin: f32,
+    /// Сколько секунд осталось жить (брызги); у обычных частиц — бесконечность.
+    pub life: f32,
 }
 
 /// Кромка, на которой лежит снег: верх окна, Dock или низ экрана.
@@ -114,6 +122,9 @@ impl Rng {
     pub fn range(&mut self, a: f32, b: f32) -> f32 {
         a + (b - a) * self.unit()
     }
+    fn byte(&mut self) -> u8 {
+        (self.unit() * 256.0) as u8
+    }
 }
 
 pub struct Sim {
@@ -121,7 +132,10 @@ pub struct Sim {
     pub h: f32,
     pub particles: Vec<Particle>,
     pub surfaces: HashMap<i64, Surface>,
-    /// Снежинок в секунду на 1000 точек ширины экрана.
+    /// Что сейчас падает и из чего состоят кучи.
+    kind: Kind,
+    /// Снежинок в секунду на 1000 точек ширины экрана (для других материалов
+    /// умножается на `Material::rate`).
     pub rate: f32,
     /// Окна непроницаемы: снег не идёт поверх их содержимого.
     pub solid: bool,
@@ -131,32 +145,48 @@ pub struct Sim {
     rng: Rng,
 }
 
-fn debris(ps: &mut Vec<Particle>, x: f32, y: f32, vx: f32, vy: f32, mass: f32) {
+/// Комок материала `kind`, сбитый с кучи.
+#[allow(clippy::too_many_arguments)]
+fn debris(ps: &mut Vec<Particle>, rng: &mut Rng, kind: Kind, land: bool, x: f32, y: f32, vx: f32, vy: f32, mass: f32) {
     if ps.len() >= MAX_PARTICLES || mass <= 0.05 {
         return;
     }
-    let r = (mass / 2.0).sqrt().clamp(1.0, 3.5);
-    ps.push(Particle { x, y, vx, vy, r, mass, land: true, debris: true, layer: 2, phase: 0.0 });
+    let m = kind.material();
+    let r = (mass / (2.0 * m.density)).sqrt().clamp(m.scale, m.scale * 3.5);
+    ps.push(Particle {
+        x,
+        y,
+        vx,
+        vy,
+        r,
+        mass,
+        land,
+        debris: true,
+        layer: 2,
+        phase: rng.range(0.0, 6.28),
+        kind,
+        tint: rng.byte(),
+        angle: rng.range(0.0, 6.28),
+        spin: rng.range(-m.spin, m.spin),
+        life: f32::INFINITY,
+    });
 }
 
-/// Превращает весь снег поверхности в падающие комки со скоростью `vel`.
-fn dump(s: &mut Surface, vel: (f32, f32), ps: &mut Vec<Particle>, rng: &mut Rng) {
+/// Превращает всю кучу в падающие комки со скоростью `vel`.
+fn dump(s: &mut Surface, vel: (f32, f32), ps: &mut Vec<Particle>, rng: &mut Rng, kind: Kind, land: bool) {
+    let chunk = kind.material().chunk * 1.6;
     for i in 0..s.h.len() {
         if s.h[i] <= 0.3 {
+            s.h[i] = 0.0;
             continue;
         }
         let mass = s.h[i] * COL_W;
-        let k = ((mass / 8.0) as usize).max(1);
+        let k = ((mass / chunk) as usize).max(1);
         let x = s.x0 + (i as f32 + 0.5) * COL_W;
         for _ in 0..k {
-            debris(
-                ps,
-                x + rng.range(-1.0, 1.0),
-                s.y - rng.range(0.0, s.h[i]),
-                vel.0 * 0.4 + rng.range(-25.0, 25.0),
-                vel.1 * 0.4 + rng.range(-15.0, 25.0),
-                mass / k as f32,
-            );
+            let (px, py) = (x + rng.range(-1.0, 1.0), s.y - rng.range(0.0, s.h[i]));
+            let (vx, vy) = (vel.0 * 0.4 + rng.range(-25.0, 25.0), vel.1 * 0.4 + rng.range(-15.0, 25.0));
+            debris(ps, rng, kind, land, px, py, vx, vy, mass / k as f32);
         }
         s.h[i] = 0.0;
     }
@@ -179,6 +209,7 @@ impl Sim {
             h: 0.0,
             particles: Vec::with_capacity(MAX_PARTICLES),
             surfaces: HashMap::new(),
+            kind: Kind::Snow,
             rate: 40.0,
             solid: false,
             solids: Vec::new(),
@@ -188,10 +219,29 @@ impl Sim {
         }
     }
 
-    /// Сбрасывает все сугробы — снег падает вниз.
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// Меняет материал. Старые кучи осыпаются и улетают за нижний край экрана,
+    /// старые частицы долетают, но уже не ложатся — новые кучи растут с нуля.
+    pub fn set_kind(&mut self, kind: Kind) {
+        if kind == self.kind {
+            return;
+        }
+        for p in self.particles.iter_mut() {
+            p.land = false;
+        }
+        for s in self.surfaces.values_mut() {
+            dump(s, (0.0, 0.0), &mut self.particles, &mut self.rng, self.kind, false);
+        }
+        self.kind = kind;
+    }
+
+    /// Сбрасывает все кучи — материал падает вниз.
     pub fn dump_all(&mut self) {
         for s in self.surfaces.values_mut() {
-            dump(s, (0.0, 0.0), &mut self.particles, &mut self.rng);
+            dump(s, (0.0, 0.0), &mut self.particles, &mut self.rng, self.kind, true);
         }
     }
 
@@ -227,13 +277,13 @@ impl Sim {
                             old.h[i] = 0.0;
                         }
                     }
-                    dump(&mut old, (0.0, 0.0), &mut self.particles, &mut self.rng);
+                    dump(&mut old, (0.0, 0.0), &mut self.particles, &mut self.rng, self.kind, true);
                     old.h = h;
                     old.vis = vec![true; n];
                 } else if dx.abs() > 0.5 || dy.abs() > 0.5 {
                     // окно подвинули — снег стряхивается
                     let v = ((dx / poll_dt).clamp(-800.0, 800.0), (dy / poll_dt).clamp(-800.0, 800.0));
-                    dump(&mut old, v, &mut self.particles, &mut self.rng);
+                    dump(&mut old, v, &mut self.particles, &mut self.rng, self.kind, true);
                 }
                 old.frame = frame;
                 old.x0 = xa;
@@ -304,7 +354,7 @@ impl Sim {
         let gone: Vec<i64> = self.surfaces.iter().filter(|(_, s)| !s.seen).map(|(id, _)| *id).collect();
         for id in gone {
             if let Some(mut s) = self.surfaces.remove(&id) {
-                dump(&mut s, (0.0, 0.0), &mut self.particles, &mut self.rng);
+                dump(&mut s, (0.0, 0.0), &mut self.particles, &mut self.rng, self.kind, true);
             }
         }
     }
@@ -313,40 +363,48 @@ impl Sim {
 
     /// `c` — положение курсора, `cv` — его скорость.
     pub fn step(&mut self, dt: f32, c: (f32, f32), cv: (f32, f32)) {
-        let Sim { w, h, particles, surfaces, rate, solid, solids, t, spawn_acc, rng } = self;
-        let (w, h, solid) = (*w, *h, *solid);
+        let Sim { w, h, particles, surfaces, kind, rate, solid, solids, t, spawn_acc, rng } = self;
+        let (w, h, solid, kind) = (*w, *h, *solid, *kind);
+        // материал, который падает сейчас и из которого состоят кучи
+        let mat = kind.material();
         *t += dt;
         let t = *t;
 
-        // новые снежинки
-        *spawn_acc += *rate * dt * w / 1000.0;
+        // новые частицы
+        *spawn_acc += *rate * mat.rate * dt * w / 1000.0;
         while *spawn_acc >= 1.0 {
             *spawn_acc -= 1.0;
             if particles.len() >= MAX_PARTICLES {
                 continue;
             }
             let u = rng.range(0.0, 1.0);
-            let r = 1.0 + 2.2 * u * u;
-            let layer = if r < 1.5 { 0 } else if r < 2.2 { 1 } else { 2 };
+            let size = 1.0 + 2.2 * u * u; // размер в «снежинках»: от 1 до 3.2
+            let r = size * mat.scale;
+            let layer = if size < 1.5 { 0 } else if size < 2.2 { 1 } else { 2 };
             particles.push(Particle {
                 x: rng.range(-60.0, w + 60.0),
                 y: -8.0,
                 vx: 0.0,
-                vy: 20.0 + r * 15.0,
+                vy: (mat.fall_base + mat.fall_size * size) * 0.7,
                 r,
-                mass: r * r * 2.0,
-                land: layer > 0 && rng.range(0.0, 1.0) < 0.7,
+                mass: r * r * 2.0 * mat.density,
+                land: layer > 0 && rng.range(0.0, 1.0) < mat.land_share,
                 debris: false,
                 layer,
                 phase: rng.range(0.0, 6.28),
+                kind,
+                tint: rng.byte(),
+                angle: rng.range(0.0, 6.28),
+                spin: rng.range(-mat.spin, mat.spin),
+                life: f32::INFINITY,
             });
         }
 
         let wind = 25.0 * (t * 0.13).sin() + 12.0 * (t * 0.51 + 1.0).sin();
 
-        // курсор сгребает сугробы
+        // курсор сгребает кучи
         for s in surfaces.values_mut() {
-            if !(c.1 > s.y - MAX_PILE - CURSOR_R - 4.0 && c.1 < s.y + CURSOR_R) || s.h.is_empty() {
+            if !(c.1 > s.y - mat.max_pile - CURSOR_R - 4.0 && c.1 < s.y + CURSOR_R) || s.h.is_empty() {
                 continue;
             }
             let a = (((c.0 - CURSOR_R - s.x0) / COL_W).floor() as isize).max(0);
@@ -372,31 +430,32 @@ impl Sim {
                 let ex = s.h[i] - allowed;
                 s.h[i] = allowed;
                 let mass = ex * COL_W;
-                let k = ((mass / 5.0) as usize).clamp(1, 3);
+                let k = ((mass / mat.chunk) as usize).clamp(1, mat.max_chunks);
                 for _ in 0..k {
-                    debris(
-                        particles,
-                        x,
-                        s.y - allowed - rng.range(0.0, ex),
-                        cv.0 * 0.6 + dx / CURSOR_R * 70.0 + rng.range(-50.0, 50.0),
-                        -cv.1.abs() * 0.3 - rng.range(30.0, 130.0),
-                        mass / k as f32,
-                    );
+                    let py = s.y - allowed - rng.range(0.0, ex);
+                    let vx = cv.0 * 0.6 + dx / CURSOR_R * 70.0 + rng.range(-50.0, 50.0);
+                    let vy = -cv.1.abs() * 0.3 - rng.range(30.0, 130.0);
+                    debris(particles, rng, kind, true, x, py, vx, vy, mass / k as f32);
                 }
             }
         }
 
         // частицы
+        let mut splashes: Vec<(f32, f32)> = Vec::new();
         let mut i = 0;
         while i < particles.len() {
             let p = &mut particles[i];
+            let m = p.kind.material();
+            let size = p.r / m.scale;
             let (prev_x, prev_y) = (p.x, p.y);
-            let term = if p.debris { 460.0 } else { 28.0 + p.r * 20.0 };
-            let k = if p.debris { 2.2 } else { 3.0 };
+            let mut term = if p.debris { m.debris_fall } else { m.fall_base + m.fall_size * size };
+            term *= 1.0 + m.flutter * (t * 2.3 + p.phase * 1.7).sin();
+            let k = if p.debris { m.debris_drag } else { m.drag };
+            let swing = (t * m.sway_freq + p.phase).sin();
             let tx = if p.debris {
-                wind * 0.3
+                wind * 0.3 * m.wind + m.debris_sway * swing
             } else {
-                wind * (0.5 + p.r * 0.25) + 14.0 * (t * 1.7 + p.phase).sin()
+                wind * m.wind * (0.5 + size * 0.25) + m.sway * swing
             };
 
             // вихрь от курсора
@@ -413,11 +472,14 @@ impl Sim {
             p.vy += (term - p.vy) * k * dt;
             p.x += p.vx * dt;
             p.y += p.vy * dt;
+            // лист кружится и покачивается в такт сносу
+            p.angle += (p.spin + m.spin * 0.7 * (t * m.sway_freq + p.phase).cos()) * dt;
+            p.life -= dt;
 
-            let mut dead = p.y > h + 12.0 || p.x < -80.0 || p.x > w + 80.0;
-            if !dead && (p.land || solid) && p.vy > 0.0 {
+            let mut dead = p.life <= 0.0 || p.y > h + 12.0 || p.x < -80.0 || p.x > w + 80.0;
+            if !dead && (p.land || (solid && p.life.is_infinite())) && p.vy > 0.0 && p.kind == kind {
                 for s in surfaces.values_mut() {
-                    if !(p.y >= s.y - MAX_PILE - 30.0 && prev_y <= s.y + 2.0) {
+                    if !(p.y >= s.y - mat.max_pile - 60.0 && prev_y <= s.y + 2.0) {
                         continue;
                     }
                     let col = ((p.x - s.x0) / COL_W).floor();
@@ -429,12 +491,15 @@ impl Sim {
                     if !(prev_y <= top + 1.5 && p.y >= top) {
                         continue;
                     }
-                    let fill = s.h[col] / MAX_PILE;
+                    let fill = s.h[col] / mat.max_pile;
                     if p.debris || rng.range(0.0, 1.0) > fill * fill {
                         deposit(s, col, p.mass);
                         dead = true;
                     } else if solid && s.y < h - 1.0 {
-                        dead = true; // сугроб полон — снежинка тает, но в окно не залетает
+                        dead = true; // куча полна — частица тает, но в окно не залетает
+                    }
+                    if dead && mat.splash {
+                        splashes.push((p.x, top));
                     }
                     break;
                 }
@@ -453,7 +518,7 @@ impl Sim {
                         p.x = r.max_x() + 0.5;
                         p.vx = p.vx.abs() * 0.3;
                     } else {
-                        dead = true; // упала на кромку без сугроба или окно накрыло её
+                        dead = true; // упала на кромку без кучи или окно накрыло её
                     }
                     break;
                 }
@@ -465,25 +530,57 @@ impl Sim {
             }
         }
 
-        // осыпание сугробов и срыв снега с краёв
+        // брызги: короткоживущие капельки без массы, чисто для вида
+        for (x, y) in splashes {
+            for _ in 0..2 {
+                if particles.len() >= MAX_PARTICLES {
+                    break;
+                }
+                particles.push(Particle {
+                    x,
+                    y: y - 1.0,
+                    vx: rng.range(-70.0, 70.0),
+                    vy: rng.range(-110.0, -45.0),
+                    r: mat.scale * 0.9,
+                    mass: 0.0,
+                    land: false,
+                    debris: true,
+                    layer: 1,
+                    phase: 0.0,
+                    kind,
+                    tint: 0,
+                    angle: 0.0,
+                    spin: 0.0,
+                    life: rng.range(0.12, 0.28),
+                });
+            }
+        }
+
+        // осыпание куч, высыхание и срыв материала с краёв
+        let spill = mat.chunk * 0.8;
         for s in surfaces.values_mut() {
             let n = s.h.len();
             if n < 2 {
                 continue;
             }
-            for pass in 0..2 {
+            if mat.evaporate > 0.0 {
+                for v in s.h.iter_mut() {
+                    *v = (*v - mat.evaporate * dt).max(0.0);
+                }
+            }
+            for pass in 0..mat.relax_passes {
                 for j in 0..n - 1 {
-                    let a = if pass == 0 { j } else { n - 2 - j };
+                    let a = if pass % 2 == 0 { j } else { n - 2 - j };
                     if !(s.vis[a] && s.vis[a + 1]) {
                         continue;
                     }
                     let d = s.h[a] - s.h[a + 1];
-                    if d > SLOPE {
-                        let m = (d - SLOPE) * 0.25;
+                    if d > mat.slope {
+                        let m = (d - mat.slope) * 0.25;
                         s.h[a] -= m;
                         s.h[a + 1] += m;
-                    } else if d < -SLOPE {
-                        let m = (-d - SLOPE) * 0.25;
+                    } else if d < -mat.slope {
+                        let m = (-d - mat.slope) * 0.25;
                         s.h[a] += m;
                         s.h[a + 1] -= m;
                     }
@@ -492,24 +589,26 @@ impl Sim {
             if s.y >= h - 1.0 {
                 continue; // у земли краёв нет
             }
-            if s.vis[0] && s.h[0] > 2.0 {
-                let m = (s.h[0] - 2.0) * 0.2;
+            if s.vis[0] && s.h[0] > mat.edge_keep {
+                let m = (s.h[0] - mat.edge_keep) * 0.2;
                 s.h[0] -= m;
                 s.spill_l += m * COL_W;
-                while s.spill_l >= 4.0 {
-                    s.spill_l -= 4.0;
+                while s.spill_l >= spill {
+                    s.spill_l -= spill;
                     let y = s.y - rng.range(0.0, s.h[0]);
-                    debris(particles, s.frame.min_x() - 1.0, y, rng.range(-30.0, -6.0), rng.range(-10.0, 10.0), 4.0);
+                    let (vx, vy) = (rng.range(-30.0, -6.0), rng.range(-10.0, 10.0));
+                    debris(particles, rng, kind, true, s.frame.min_x() - 1.0, y, vx, vy, spill);
                 }
             }
-            if s.vis[n - 1] && s.h[n - 1] > 2.0 {
-                let m = (s.h[n - 1] - 2.0) * 0.2;
+            if s.vis[n - 1] && s.h[n - 1] > mat.edge_keep {
+                let m = (s.h[n - 1] - mat.edge_keep) * 0.2;
                 s.h[n - 1] -= m;
                 s.spill_r += m * COL_W;
-                while s.spill_r >= 4.0 {
-                    s.spill_r -= 4.0;
+                while s.spill_r >= spill {
+                    s.spill_r -= spill;
                     let y = s.y - rng.range(0.0, s.h[n - 1]);
-                    debris(particles, s.frame.max_x() + 1.0, y, rng.range(6.0, 30.0), rng.range(-10.0, 10.0), 4.0);
+                    let (vx, vy) = (rng.range(6.0, 30.0), rng.range(-10.0, 10.0));
+                    debris(particles, rng, kind, true, s.frame.max_x() + 1.0, y, vx, vy, spill);
                 }
             }
         }
@@ -612,5 +711,70 @@ mod tests {
         let col = ((400.0 - surf.x0) / COL_W) as usize;
         assert!(surf.h[col] < 1.0, "курсор не срезал сугроб: {}", surf.h[col]);
         assert!(s.particles.iter().any(|p| p.debris));
+    }
+
+    #[test]
+    fn every_material_falls_and_lands() {
+        use crate::materials::KINDS;
+        for kind in KINDS {
+            let mut s = sim();
+            s.set_kind(kind);
+            let win = [WindowInfo { id: 7, rect: Rect::new(200.0, 300.0, 400.0, 300.0) }];
+            let mut peak = 0.0f32;
+            for _ in 0..(60 * 40) {
+                s.refresh(&win, None, 0.05);
+                s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+                peak = peak.max(s.surfaces[&7].h.iter().sum());
+            }
+            assert!(peak > 0.5, "{kind:?}: на окно ничего не легло");
+            assert!(s.particles.len() <= MAX_PARTICLES);
+            let max_pile = kind.material().max_pile;
+            for surf in s.surfaces.values() {
+                assert!(surf.h.iter().all(|h| h.is_finite() && *h >= 0.0 && *h < max_pile * 3.0), "{kind:?}");
+            }
+            assert!(s.particles.iter().all(|p| p.x.is_finite() && p.y.is_finite()), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn water_levels_out_and_dries() {
+        let mut s = sim();
+        s.set_kind(Kind::Rain);
+        s.rate = 0.0;
+        let win = [WindowInfo { id: 7, rect: Rect::new(200.0, 300.0, 400.0, 300.0) }];
+        s.refresh(&win, None, 0.05);
+        s.surfaces.get_mut(&7).unwrap().h[100] = 3.0; // капля посреди кромки
+        for _ in 0..30 {
+            s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+        }
+        let surf = &s.surfaces[&7];
+        assert!(surf.h[100] < 1.5, "вода не растеклась: {}", surf.h[100]);
+        assert!(surf.h[97] > 0.0 && surf.h[103] > 0.0);
+        for _ in 0..(60 * 20) {
+            s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+        }
+        assert_eq!(s.surfaces[&7].h.iter().sum::<f32>(), 0.0, "вода не высохла");
+    }
+
+    #[test]
+    fn changing_material_clears_piles() {
+        let mut s = sim();
+        s.rate = 0.0;
+        let win = [WindowInfo { id: 7, rect: Rect::new(200.0, 300.0, 400.0, 300.0) }];
+        s.refresh(&win, None, 0.05);
+        for h in s.surfaces.get_mut(&7).unwrap().h.iter_mut() {
+            *h = 5.0;
+        }
+        s.set_kind(Kind::Sand);
+        assert_eq!(s.kind(), Kind::Sand);
+        assert_eq!(total_pile(&s), 0.0);
+        // старый снег осыпается, но больше нигде не ложится
+        assert!(s.particles.iter().all(|p| p.kind == Kind::Snow && !p.land));
+        for _ in 0..(60 * 10) {
+            s.refresh(&win, None, 0.05);
+            s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+        }
+        assert_eq!(total_pile(&s), 0.0);
+        assert!(s.particles.is_empty());
     }
 }
