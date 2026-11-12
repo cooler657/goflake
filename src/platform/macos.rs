@@ -5,15 +5,20 @@
 
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::null;
+use std::time::{Duration, Instant};
 
-use objc2::msg_send;
+use objc2::encode::{Encode, Encoding};
+use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
+use objc2::{class, msg_send};
 use winit::event_loop::EventLoopBuilder;
 use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS, WindowAttributesExtMacOS};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{Window, WindowAttributes};
 
 use super::RawWindow;
+use crate::sim::Sim;
+use crate::soft::Canvas;
 
 pub const PHYSICAL: bool = false;
 pub const DOCK_LIFT: f32 = 5.0;
@@ -39,6 +44,17 @@ struct CGSize {
 struct CGRect {
     origin: CGPoint,
     size: CGSize,
+}
+
+// SAFETY: раскладка и кодировки совпадают с системными CGPoint, CGSize и CGRect.
+unsafe impl Encode for CGPoint {
+    const ENCODING: Encoding = Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
+}
+unsafe impl Encode for CGSize {
+    const ENCODING: Encoding = Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]);
+}
+unsafe impl Encode for CGRect {
+    const ENCODING: Encoding = Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
 }
 
 #[repr(C)]
@@ -76,7 +92,12 @@ unsafe extern "C" {
     fn CFNumberGetValue(number: CFRef, kind: isize, out: *mut c_void) -> u8;
     fn CFStringCreateWithCString(alloc: CFRef, s: *const c_char, encoding: u32) -> CFRef;
     fn CFStringGetCString(s: CFRef, buf: *mut c_char, size: isize, encoding: u32) -> u8;
+    fn CFDataCreate(alloc: CFRef, bytes: *const u8, length: isize) -> CFRef;
 }
+
+// CALayer и CATransaction живут в QuartzCore.
+#[link(name = "QuartzCore", kind = "framework")]
+unsafe extern "C" {}
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
@@ -91,6 +112,22 @@ unsafe extern "C" {
     fn CGRectMakeWithDictionaryRepresentation(dict: CFRef, rect: *mut CGRect) -> u8;
     fn CGEventCreate(source: CFRef) -> CFRef;
     fn CGEventGetLocation(event: CFRef) -> CGPoint;
+    fn CGColorSpaceCreateDeviceRGB() -> CFRef;
+    fn CGDataProviderCreateWithCFData(data: CFRef) -> CFRef;
+    #[allow(clippy::too_many_arguments)]
+    fn CGImageCreate(
+        width: usize,
+        height: usize,
+        bits_per_component: usize,
+        bits_per_pixel: usize,
+        bytes_per_row: usize,
+        space: CFRef,
+        bitmap_info: u32,
+        provider: CFRef,
+        decode: *const f64,
+        should_interpolate: u8,
+        intent: i32,
+    ) -> CFRef;
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -298,5 +335,114 @@ pub fn configure_window(window: &Window) {
         let _: () = msg_send![ns_window, setLevel: STATUS_BAR_LEVEL];
         let _: () = msg_send![ns_window, setCollectionBehavior: BEHAVIOR];
         let _: () = msg_send![ns_window, setIgnoresMouseEvents: true];
+    }
+}
+
+/// NSView окна winit.
+fn ns_view(window: &Window) -> Option<*mut AnyObject> {
+    let handle = window.window_handle().ok()?;
+    let RawWindowHandle::AppKit(h) = handle.as_raw() else { return None };
+    Some(h.ns_view.as_ptr().cast())
+}
+
+/// Программная отрисовка на macOS: кадр рисуется на процессоре (`soft::Canvas`)
+/// и отдаётся системе готовой картинкой в слое окна. Metal не используется.
+///
+/// Растр считается в логических точках, без удвоения под Retina: так кадр
+/// вчетверо легче, а мягкости осадкам это не вредит.
+pub struct SoftSurface {
+    view: *mut AnyObject,
+    layer: Retained<AnyObject>,
+    color_space: CFRef,
+    canvas: Canvas,
+    bytes: Vec<u8>,
+    last_frame: Instant,
+}
+
+/// Сколько длится кадр программной отрисовки (60 кадров в секунду).
+const SOFT_FRAME: Duration = Duration::from_micros(16_667);
+/// kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little — байты B, G, R, A.
+const BGRA_PREMULTIPLIED: u32 = 2 | (2 << 12);
+
+impl SoftSurface {
+    pub fn new(window: &Window) -> Result<Self, String> {
+        let view = ns_view(window).ok_or("у окна нет NSView")?;
+        // SAFETY: `view` — живой NSView этого окна, вызовы идут из главного потока;
+        // селекторы и типы аргументов соответствуют NSView и CALayer.
+        unsafe {
+            let _: () = msg_send![view, setWantsLayer: true];
+            let root: *mut AnyObject = msg_send![view, layer];
+            if root.is_null() {
+                return Err("у окна нет слоя для отрисовки".into());
+            }
+            // убираем слой, оставшийся от отрисовки на видеокарте
+            let _: () = msg_send![root, setSublayers: null::<AnyObject>()];
+            let layer: Retained<AnyObject> = msg_send![class!(CALayer), new];
+            let _: () = msg_send![root, addSublayer: &*layer];
+            Ok(Self {
+                view,
+                layer,
+                color_space: CGColorSpaceCreateDeviceRGB(),
+                canvas: Canvas::new(),
+                bytes: Vec::new(),
+                last_frame: Instant::now(),
+            })
+        }
+    }
+
+    /// Рисует и показывает кадр, затем выдерживает паузу до следующего.
+    pub fn render(&mut self, sim: &Sim) -> bool {
+        self.canvas.draw(sim, 1.0);
+        let (w, h) = (self.canvas.width, self.canvas.height);
+        // SAFETY: слой и вид живы, пока жив `self`; все созданные объекты
+        // CoreFoundation освобождаются; данные картинки копируются в CFData.
+        unsafe {
+            // Вид winit перевёрнут по вертикали; если из-за этого слой показывает
+            // картинку вверх ногами, отдаём строки в обратном порядке.
+            let flipped: bool = msg_send![&*self.layer, contentsAreFlipped];
+            self.bytes.clear();
+            self.bytes.reserve(w * h * 4);
+            for row in 0..h {
+                let src = if flipped { h - 1 - row } else { row };
+                // на Mac порядок байтов младший-первый: u32 0xAARRGGBB — это уже B, G, R, A
+                self.bytes.extend_from_slice(bytemuck::cast_slice(&self.canvas.pixels[src * w..(src + 1) * w]));
+            }
+            let data = CFDataCreate(null(), self.bytes.as_ptr(), self.bytes.len() as isize);
+            let provider = CGDataProviderCreateWithCFData(data);
+            let image =
+                CGImageCreate(w, h, 8, 32, w * 4, self.color_space, BGRA_PREMULTIPLIED, provider, null(), 0, 0);
+            let root: *mut AnyObject = msg_send![self.view, layer];
+            let bounds: CGRect = msg_send![root, bounds];
+            // без неявных анимаций: иначе кадры плавно «перетекали» бы друг в друга
+            let _: () = msg_send![class!(CATransaction), begin];
+            let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+            let _: () = msg_send![&*self.layer, setFrame: bounds];
+            let _: () = msg_send![&*self.layer, setContents: image as *mut AnyObject];
+            let _: () = msg_send![class!(CATransaction), commit];
+            for obj in [image, provider, data] {
+                if !obj.is_null() {
+                    CFRelease(obj);
+                }
+            }
+        }
+        // вертикальной синхронизации здесь нет — выдерживаем темп сами
+        let elapsed = self.last_frame.elapsed();
+        if elapsed < SOFT_FRAME {
+            std::thread::sleep(SOFT_FRAME - elapsed);
+        }
+        self.last_frame = Instant::now();
+        true
+    }
+}
+
+impl Drop for SoftSurface {
+    fn drop(&mut self) {
+        // SAFETY: слой жив; цветовое пространство создано в `new` и больше не нужно.
+        unsafe {
+            let _: () = msg_send![&*self.layer, removeFromSuperlayer];
+            if !self.color_space.is_null() {
+                CFRelease(self.color_space);
+            }
+        }
     }
 }

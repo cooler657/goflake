@@ -5,8 +5,8 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
-use crate::materials::Shape;
-use crate::sim::{COL_W, MAX_PARTICLES, Sim};
+use crate::look::{self, FEATHER_PX, SHADOW_PX, SHADOW_RGB};
+use crate::sim::{MAX_PARTICLES, Sim};
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -33,19 +33,6 @@ struct Flake {
 struct PileVertex {
     pos: [f32; 2],
     color: [f32; 4],
-}
-
-/// Прозрачность слоёв частиц: дальний, средний, ближний.
-const LAYER_ALPHA: [f32; 3] = [0.45, 0.7, 0.95];
-const SHADOW_RGB: [f32; 3] = [0.1, 0.2, 0.4];
-
-/// Псевдослучайное число от 0 до 1 по целому — для пёстрых куч.
-fn hash01(n: u32) -> f32 {
-    let mut x = n.wrapping_mul(0x9E37_79B1);
-    x ^= x >> 15;
-    x = x.wrapping_mul(0x85EB_CA6B);
-    x ^= x >> 13;
-    (x & 0xFFFF) as f32 / 65_535.0
 }
 
 pub struct Renderer {
@@ -315,73 +302,39 @@ impl Renderer {
     /// Строит сетку куч: тень над кромкой, сглаживающая полоска, тело.
     fn build_piles(&mut self, sim: &Sim, scale: f32) {
         self.pile.clear();
-        let mat = sim.kind().material();
         let px = 1.0 / scale;
-        let shadow = [SHADOW_RGB[0], SHADOW_RGB[1], SHADOW_RGB[2], mat.pile_shadow];
         let clear = |c: [f32; 4]| [c[0], c[1], c[2], 0.0];
+        let pile = &mut self.pile;
         type V = ([f32; 2], [f32; 4]);
         let mut quad = |a: V, b: V, c: V, d: V| {
             for (pos, color) in [a, b, c, c, b, d] {
-                self.pile.push(PileVertex { pos, color });
+                pile.push(PileVertex { pos, color });
             }
         };
-        for (id, s) in sim.surfaces.iter() {
-            let n = s.h.len();
-            let base = s.y + 0.5;
-            let seed = (*id as u32).wrapping_mul(7919);
-            // цвета верха и низа кучи в точке контура; у листьев — пятнами по палитре
-            let colors = |k: usize| -> ([f32; 4], [f32; 4]) {
-                if !mat.pile_mottled {
-                    return (mat.pile_top, mat.pile_base);
+        look::pile_runs(sim, |run, base, shadow_alpha| {
+            let shadow = [SHADOW_RGB[0], SHADOW_RGB[1], SHADOW_RGB[2], shadow_alpha];
+            for pair in run.windows(2) {
+                let (p, q) = (pair[0], pair[1]);
+                if shadow_alpha > 0.0 {
+                    // мягкая тень над кучей — чтобы она читалась на светлом фоне
+                    quad(
+                        ([p.x, p.top - SHADOW_PX * px], clear(shadow)),
+                        ([q.x, q.top - SHADOW_PX * px], clear(shadow)),
+                        ([p.x, p.top], shadow),
+                        ([q.x, q.top], shadow),
+                    );
                 }
-                let c = mat.colors[(hash01(seed ^ (k as u32 / 3)) * mat.colors.len() as f32) as usize % mat.colors.len()];
-                ([c[0], c[1], c[2], 1.0], [c[0] * 0.7, c[1] * 0.7, c[2] * 0.7, 1.0])
-            };
-            let mut i = 0;
-            while i < n {
-                if !(s.vis[i] && s.h[i] > 0.15) {
-                    i += 1;
-                    continue;
-                }
-                let mut j = i;
-                while j < n && s.vis[j] && s.h[j] > 0.15 {
-                    j += 1;
-                }
-                // контур участка: (x, верх кучи); на концах высота сходит к нулю
-                let mut prev = (s.x0 + i as f32 * COL_W, s.y, colors(i));
-                for k in i..=j {
-                    let cur = if k == j {
-                        (s.x0 + j as f32 * COL_W, s.y, colors(j))
-                    } else {
-                        let l = if k > i { s.h[k - 1] } else { 0.0 };
-                        let r = if k + 1 < j { s.h[k + 1] } else { 0.0 };
-                        let mut top = (l + 2.0 * s.h[k] + r) / 4.0;
-                        if mat.pile_mottled {
-                            // торчащие листья: неровная кромка
-                            top += (hash01(seed ^ (k as u32).wrapping_mul(31)) - 0.3) * top.min(3.0);
-                        }
-                        (s.x0 + (k as f32 + 0.5) * COL_W, s.y - top.max(0.0), colors(k))
-                    };
-                    let (x0, t0, (top0, base0)) = prev;
-                    let (x1, t1, (top1, base1)) = cur;
-                    if mat.pile_shadow > 0.0 {
-                        // мягкая тень над кучей — чтобы она читалась на светлом фоне
-                        quad(
-                            ([x0, t0 - 3.5 * px], clear(shadow)),
-                            ([x1, t1 - 3.5 * px], clear(shadow)),
-                            ([x0, t0], shadow),
-                            ([x1, t1], shadow),
-                        );
-                    }
-                    // сглаживание верхней кромки
-                    quad(([x0, t0 - 1.5 * px], clear(top0)), ([x1, t1 - 1.5 * px], clear(top1)), ([x0, t0], top0), ([x1, t1], top1));
-                    // тело кучи
-                    quad(([x0, t0], top0), ([x1, t1], top1), ([x0, base], base0), ([x1, base], base1));
-                    prev = cur;
-                }
-                i = j;
+                // сглаживание верхней кромки
+                quad(
+                    ([p.x, p.top - FEATHER_PX * px], clear(p.top_color)),
+                    ([q.x, q.top - FEATHER_PX * px], clear(q.top_color)),
+                    ([p.x, p.top], p.top_color),
+                    ([q.x, q.top], q.top_color),
+                );
+                // тело кучи
+                quad(([p.x, p.top], p.top_color), ([q.x, q.top], q.top_color), ([p.x, base], p.base_color), ([q.x, base], q.base_color));
             }
-        }
+        });
     }
 
     /// Рисует кадр. Возвращает `false`, если кадр получить не удалось (окно скрыто и т. п.).
@@ -398,20 +351,14 @@ impl Renderer {
 
         self.flakes.clear();
         self.flakes.extend(sim.particles.iter().take(MAX_PARTICLES).map(|p| {
-            let m = p.kind.material();
-            let c = m.colors[p.tint as usize % m.colors.len()];
-            let color = [c[0], c[1], c[2], LAYER_ALPHA[p.layer.min(2) as usize] * m.alpha];
-            let (half, rotation, shape) = match m.shape {
-                Shape::Dot => ([p.r, p.r], 0.0, 0.0),
-                Shape::Streak => {
-                    // штрих вытянут вдоль скорости: чем быстрее капля, тем он длиннее
-                    let speed = (p.vx * p.vx + p.vy * p.vy).sqrt();
-                    let radius = (p.r * 0.4).max(0.4);
-                    ([radius + (speed * 0.007).clamp(1.0, 7.0), radius], p.vy.atan2(p.vx), 0.0)
-                }
-                Shape::Leaf => ([p.r, p.r * 0.5], p.angle, 1.0),
-            };
-            Flake { center: [p.x, p.y], half, rotation, shape, color }
+            let f = look::flake(p);
+            Flake {
+                center: f.center,
+                half: f.half,
+                rotation: f.rotation,
+                shape: if f.leaf { 1.0 } else { 0.0 },
+                color: f.color,
+            }
         }));
         self.build_piles(sim, scale);
 

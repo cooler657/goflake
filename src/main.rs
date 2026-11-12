@@ -6,11 +6,14 @@
 // В релизной сборке под Windows не открываем окно консоли.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
+mod gfx;
+mod look;
 mod materials;
 mod platform;
 mod render;
 mod settings;
 mod sim;
+mod soft;
 mod tray;
 
 use std::sync::Arc;
@@ -23,7 +26,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId, WindowLevel};
 
 use platform::Platform;
-use render::Renderer;
+use gfx::Gfx;
 use settings::{RATES, Settings};
 use sim::{Rect, Sim, WindowInfo};
 use tray::{Cmd, MenuState, Tray};
@@ -35,7 +38,7 @@ const POLL_SLOW: f32 = 2.0;
 
 struct Overlay {
     window: Arc<Window>,
-    gfx: Renderer,
+    gfx: Gfx,
     /// Левый верхний угол окна в физических пикселях рабочего стола.
     origin: (f32, f32),
     scale: f32,
@@ -100,9 +103,9 @@ impl App {
             rate: self.settings.rate,
             solid: self.settings.solid,
             dock: self.platform.dock_access(),
-            gpu: self.overlay.as_ref().map_or(self.settings.gpu, |o| !o.gfx.software),
+            gpu: self.overlay.as_ref().map_or(self.settings.gpu, |o| !o.gfx.software()),
             gpu_switchable: self.software_available,
-            adapter: self.overlay.as_ref().map_or_else(String::new, |o| o.gfx.adapter.clone()),
+            adapter: self.overlay.as_ref().map_or_else(String::new, |o| o.gfx.adapter()),
         }
     }
 
@@ -137,12 +140,11 @@ impl App {
         }
         platform::configure_window(&window);
 
-        let gfx = Renderer::new(window.clone(), el.owned_display_handle(), self.settings.gpu)?;
-        eprintln!("сугроб: GPU — {}", gfx.info);
-        eprintln!(
-            "сугроб: программная отрисовка {}",
-            if self.software_available { "доступна" } else { "недоступна — переключатель в меню отключён" }
-        );
+        let gfx = Gfx::new(window.clone(), el.owned_display_handle(), self.settings.gpu)?;
+        eprintln!("сугроб: отрисовка — {}", gfx.info());
+        if !self.software_available {
+            eprintln!("сугроб: программной отрисовки в системе нет — переключатель в меню отключён");
+        }
         let mut overlay = Overlay { window, gfx, origin: (pos.x as f32, pos.y as f32), scale: 1.0 };
         self.apply_size(&mut overlay);
         Ok(overlay)
@@ -163,14 +165,14 @@ impl App {
         // старую поверхность нужно освободить до создания новой на том же окне
         drop(gfx);
         let display = el.owned_display_handle();
-        let gfx = Renderer::new(window.clone(), display.clone(), self.settings.gpu).or_else(|e| {
+        let gfx = Gfx::new(window.clone(), display.clone(), self.settings.gpu).or_else(|e| {
             eprintln!("сугроб: не удалось переключить отрисовку ({e}), возвращаю прежнюю");
             self.settings.gpu = !self.settings.gpu;
-            Renderer::new(window.clone(), display, self.settings.gpu)
+            Gfx::new(window.clone(), display, self.settings.gpu)
         });
         match gfx {
             Ok(gfx) => {
-                eprintln!("сугроб: GPU — {}", gfx.info);
+                eprintln!("сугроб: отрисовка — {}", gfx.info());
                 let mut overlay = Overlay { window, gfx, origin, scale };
                 self.apply_size(&mut overlay);
                 overlay.window.request_redraw();
@@ -384,7 +386,7 @@ fn main() {
             gpu_switchable: false,
             adapter: String::new(),
         },
-        software_available: Renderer::software_available(),
+        software_available: Gfx::software_available(),
         running: true,
         last_frame: None,
         last_mouse: None,

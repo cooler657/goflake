@@ -1,0 +1,187 @@
+//! Программная отрисовка: тот же кадр, что рисует видеокарта, но на процессоре.
+//!
+//! Результат — растр с цветом, умноженным на альфу. Как показать его на экране,
+//! решает платформа. Используется там, где у системы нет программного
+//! графического адаптера (macOS).
+
+// Вне macOS программный режим обеспечивает системный адаптер, и этот модуль
+// нужен только тестам.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
+use crate::look::{self, FEATHER_PX, SHADOW_PX, SHADOW_RGB};
+use crate::sim::Sim;
+
+pub struct Canvas {
+    pub width: usize,
+    pub height: usize,
+    /// Пиксели `0xAARRGGBB`, цвет умножен на альфу. В памяти это байты B, G, R, A.
+    pub pixels: Vec<u32>,
+}
+
+impl Canvas {
+    pub fn new() -> Self {
+        Self { width: 0, height: 0, pixels: Vec::new() }
+    }
+
+    /// Очищает растр до прозрачного, при необходимости меняя размер.
+    fn reset(&mut self, width: usize, height: usize) {
+        self.width = width;
+        self.height = height;
+        self.pixels.clear();
+        self.pixels.resize(width * height, 0);
+    }
+
+    /// Накладывает цвет `rgb` с прозрачностью `alpha` (0–1) на пиксель.
+    #[inline]
+    fn blend(&mut self, x: usize, y: usize, rgb: [f32; 3], alpha: f32) {
+        if alpha <= 0.003 {
+            return;
+        }
+        let a = alpha.min(1.0);
+        let dst = &mut self.pixels[y * self.width + x];
+        let keep = 1.0 - a;
+        let ch = |shift: u32, src: f32| -> u32 {
+            let d = ((*dst >> shift) & 0xFF) as f32;
+            ((src * a * 255.0 + d * keep + 0.5) as u32).min(255)
+        };
+        let out_a = (((a * 255.0) + ((*dst >> 24) as f32) * keep + 0.5) as u32).min(255);
+        *dst = (out_a << 24) | (ch(16, rgb[0]) << 16) | (ch(8, rgb[1]) << 8) | ch(0, rgb[2]);
+    }
+
+    /// Рисует кадр. `scale` — пикселей растра на логическую точку.
+    pub fn draw(&mut self, sim: &Sim, scale: f32) {
+        let width = (sim.w * scale).ceil().max(1.0) as usize;
+        let height = (sim.h * scale).ceil().max(1.0) as usize;
+        self.reset(width, height);
+        for p in &sim.particles {
+            self.flake(&look::flake(p), scale);
+        }
+        // кучи поверх частиц — как и на видеокарте
+        look::pile_runs(sim, |run, base, shadow| self.pile(run, base, shadow, scale));
+    }
+
+    fn flake(&mut self, f: &look::FlakeLook, scale: f32) {
+        let (cx, cy) = (f.center[0] * scale, f.center[1] * scale);
+        let (a, b) = (f.half[0] * scale, f.half[1] * scale);
+        let reach = a.max(b) + 1.0;
+        let x0 = (cx - reach).floor().max(0.0) as usize;
+        let y0 = (cy - reach).floor().max(0.0) as usize;
+        let x1 = ((cx + reach).ceil() as isize).min(self.width as isize);
+        let y1 = ((cy + reach).ceil() as isize).min(self.height as isize);
+        if x1 <= 0 || y1 <= 0 {
+            return;
+        }
+        let (sin, cos) = f.rotation.sin_cos();
+        let rgb = [f.color[0], f.color[1], f.color[2]];
+        for y in y0..y1 as usize {
+            for x in x0..x1 as usize {
+                // центр пикселя в осях частицы
+                let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+                let (lx, ly) = (dx * cos + dy * sin, -dx * sin + dy * cos);
+                let cover = look::coverage(f.leaf, lx, ly, a, b);
+                if cover <= 0.0 {
+                    continue;
+                }
+                let shade = if f.leaf { look::leaf_rib(ly) } else { 1.0 };
+                self.blend(x, y, [rgb[0] * shade, rgb[1] * shade, rgb[2] * shade], f.color[3] * cover);
+            }
+        }
+    }
+
+    fn pile(&mut self, run: &[look::ContourPoint], base: f32, shadow: f32, scale: f32) {
+        let base = base * scale;
+        for pair in run.windows(2) {
+            let (p, q) = (pair[0], pair[1]);
+            let (xa, xb) = (p.x * scale, q.x * scale);
+            let first = (xa - 0.5).ceil().max(0.0) as usize;
+            let last = ((xb - 0.5).ceil() as isize).min(self.width as isize);
+            for x in first..last.max(0) as usize {
+                let t = ((x as f32 + 0.5 - xa) / (xb - xa).max(1e-3)).clamp(0.0, 1.0);
+                let top = (p.top + (q.top - p.top) * t) * scale;
+                let mix = |a: [f32; 4], b: [f32; 4]| [0, 1, 2, 3].map(|i| a[i] + (b[i] - a[i]) * t);
+                let (top_c, base_c) = (mix(p.top_color, q.top_color), mix(p.base_color, q.base_color));
+                let depth = (base - top).max(1e-3);
+                let y_from = (top - SHADOW_PX).floor().max(0.0) as usize;
+                let y_to = (base.ceil() as isize).min(self.height as isize).max(0) as usize;
+                for y in y_from..y_to {
+                    let c = y as f32 + 0.5;
+                    if c < top {
+                        let above = top - c;
+                        // тень: гуще у кромки, сходит на нет выше
+                        if shadow > 0.0 {
+                            self.blend(x, y, SHADOW_RGB, shadow * (1.0 - above / SHADOW_PX).max(0.0));
+                        }
+                        // сглаживание кромки
+                        let feather = (1.0 - above / FEATHER_PX).max(0.0);
+                        self.blend(x, y, [top_c[0], top_c[1], top_c[2]], top_c[3] * feather);
+                    } else {
+                        // тело кучи: цвет плавно меняется от верха к низу
+                        let v = ((c - top) / depth).clamp(0.0, 1.0);
+                        let rgb = [0, 1, 2].map(|i| top_c[i] + (base_c[i] - top_c[i]) * v);
+                        let alpha = top_c[3] + (base_c[3] - top_c[3]) * v;
+                        self.blend(x, y, rgb, alpha * (base - c + 0.5).clamp(0.0, 1.0));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::materials::KINDS;
+    use crate::sim::{Rect, WindowInfo};
+
+    fn alpha_sum(c: &Canvas) -> u64 {
+        c.pixels.iter().map(|p| (p >> 24) as u64).sum()
+    }
+
+    #[test]
+    fn empty_scene_is_fully_transparent() {
+        let mut sim = Sim::new(1);
+        sim.w = 320.0;
+        sim.h = 200.0;
+        let mut canvas = Canvas::new();
+        canvas.draw(&sim, 1.0);
+        assert_eq!((canvas.width, canvas.height), (320, 200));
+        assert_eq!(alpha_sum(&canvas), 0);
+    }
+
+    #[test]
+    fn every_material_draws_particles_and_piles() {
+        for kind in KINDS {
+            let mut sim = Sim::new(3);
+            sim.w = 640.0;
+            sim.h = 400.0;
+            sim.rate = 110.0;
+            sim.set_kind(kind);
+            let win = [WindowInfo { id: 5, rect: Rect::new(100.0, 200.0, 400.0, 150.0) }];
+            for _ in 0..(60 * 12) {
+                sim.refresh(&win, None, 0.05);
+                sim.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+            }
+            let mut canvas = Canvas::new();
+            canvas.draw(&sim, 1.0);
+            assert!(alpha_sum(&canvas) > 1000, "{kind:?}: кадр пуст");
+            // цвет умножен на альфу: ни один канал не превышает альфу
+            for p in &canvas.pixels {
+                let a = p >> 24;
+                assert!((p >> 16) & 0xFF <= a + 1 && (p >> 8) & 0xFF <= a + 1 && p & 0xFF <= a + 1, "{kind:?}");
+            }
+            // прямо над кромкой окна есть куча
+            let row = 199 * canvas.width;
+            assert!(canvas.pixels[row + 110..row + 490].iter().any(|p| p >> 24 > 60), "{kind:?}: нет кучи");
+        }
+    }
+
+    #[test]
+    fn scale_changes_resolution() {
+        let mut sim = Sim::new(1);
+        sim.w = 100.0;
+        sim.h = 50.0;
+        let mut canvas = Canvas::new();
+        canvas.draw(&sim, 2.0);
+        assert_eq!((canvas.width, canvas.height), (200, 100));
+    }
+}
