@@ -106,6 +106,8 @@ impl App {
             scene: self.settings.scene,
             sky: self.settings.sky,
             sky_place: self.settings.sky_place,
+            wind: self.settings.wind,
+            wind_force: self.settings.wind_force,
             rate: self.settings.rate,
             solid: self.settings.solid,
             dock: self.platform.dock_access(),
@@ -284,6 +286,16 @@ impl App {
                 self.sky.set_place(self.settings.sky_place_value());
                 self.settings.save();
             }
+            Cmd::Wind(i) => {
+                self.settings.wind = i.min(settings::WIND_DIRS.len() - 1);
+                self.sim.wind_dir = self.settings.wind_dir();
+                self.settings.save();
+            }
+            Cmd::WindForce(i) => {
+                self.settings.wind_force = i.min(settings::WIND_FORCES.len() - 1);
+                self.sim.wind_force = self.settings.wind_force_value();
+                self.settings.save();
+            }
             Cmd::Rate(i) => {
                 self.settings.rate = i.min(RATES.len() - 1);
                 self.sim.rate = RATES[self.settings.rate].1;
@@ -375,6 +387,8 @@ fn main() {
     let mut sim = Sim::new(seed);
     sim.rate = RATES[settings.rate].1;
     sim.solid = settings.solid;
+    sim.wind_dir = settings.wind_dir();
+    sim.wind_force = settings.wind_force_value();
     sim.set_kind(settings.kind());
 
     let mut builder = EventLoop::<Cmd>::with_user_event();
@@ -404,6 +418,8 @@ fn main() {
             scene: settings.scene,
             sky: settings.sky,
             sky_place: settings.sky_place,
+            wind: settings.wind,
+            wind_force: settings.wind_force,
             rate: settings.rate,
             solid: settings.solid,
             dock: None,

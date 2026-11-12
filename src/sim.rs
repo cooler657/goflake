@@ -10,6 +10,22 @@ use crate::materials::Kind;
 
 /// Ширина столбика кучи.
 pub const COL_W: f32 = 2.0;
+/// Куда дует ветер.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindDir {
+    /// Как обычно: порывы то в одну сторону, то в другую.
+    Auto,
+    /// Слева направо, с порывами.
+    Right,
+    /// Справа налево, с порывами.
+    Left,
+    /// Ветра нет.
+    Calm,
+}
+
+/// Постоянный снос при заданном направлении, поверх которого идут порывы.
+const STEADY_WIND: f32 = 40.0;
+
 /// Радиус «лопаты» курсора.
 pub const CURSOR_R: f32 = 12.0;
 /// Потолок числа частиц.
@@ -139,6 +155,9 @@ pub struct Sim {
     pub rate: f32,
     /// Окна непроницаемы: снег не идёт поверх их содержимого.
     pub solid: bool,
+    /// Куда дует ветер и во сколько раз он сильнее обычного.
+    pub wind_dir: WindDir,
+    pub wind_force: f32,
     solids: Vec<Rect>,
     t: f32,
     spawn_acc: f32,
@@ -212,6 +231,8 @@ impl Sim {
             kind: Kind::Snow,
             rate: 40.0,
             solid: false,
+            wind_dir: WindDir::Auto,
+            wind_force: 1.0,
             solids: Vec::new(),
             t: 0.0,
             spawn_acc: 0.0,
@@ -376,12 +397,33 @@ impl Sim {
 
     /// `c` — положение курсора, `cv` — его скорость.
     pub fn step(&mut self, dt: f32, c: (f32, f32), cv: (f32, f32)) {
-        let Sim { w, h, particles, surfaces, kind, rate, solid, solids, t, spawn_acc, rng } = self;
-        let (w, h, solid, kind) = (*w, *h, *solid, *kind);
+        let Sim { w, h, particles, surfaces, kind, rate, solid, wind_dir, wind_force, solids, t, spawn_acc, rng } = self;
+        let (w, h, solid, kind, wind_dir, force) = (*w, *h, *solid, *kind, *wind_dir, *wind_force);
         // материал, который падает сейчас и из которого состоят кучи
         let mat = kind.material();
         *t += dt;
         let t = *t;
+
+        // порывы: сумма двух медленных колебаний
+        let gust = 25.0 * (t * 0.13).sin() + 12.0 * (t * 0.51 + 1.0).sin();
+        // общий ветер для всех материалов; у материала поверх него свой постоянный снос
+        let wind = force
+            * match wind_dir {
+                WindDir::Auto => gust,
+                WindDir::Right => STEADY_WIND + 0.5 * gust,
+                WindDir::Left => -STEADY_WIND + 0.5 * gust,
+                WindDir::Calm => 0.0,
+            };
+        // постоянный снос материала (у бури) идёт туда же, куда выбран ветер
+        let bias_of = |m: &crate::materials::Material| {
+            force
+                * match wind_dir {
+                    WindDir::Auto => m.wind_bias,
+                    WindDir::Right => m.wind_bias.abs(),
+                    WindDir::Left => -m.wind_bias.abs(),
+                    WindDir::Calm => 0.0,
+                }
+        };
 
         // новые частицы
         *spawn_acc += *rate * mat.rate * dt * w / 1000.0;
@@ -395,9 +437,10 @@ impl Sim {
             let r = size * mat.scale;
             let layer = if size < 1.5 { 0 } else if size < 2.2 { 1 } else { 2 };
             // при сильном боковом ветре часть частиц рождается у наветренного края
-            let side = mat.side_spawn > 0.0 && rng.range(0.0, 1.0) < mat.side_spawn;
+            let bias = bias_of(mat);
+            let side = mat.side_spawn > 0.0 && bias != 0.0 && rng.range(0.0, 1.0) < mat.side_spawn;
             let (sx, sy) = if side {
-                (if mat.wind_bias >= 0.0 { -60.0 } else { w + 60.0 }, rng.range(0.0, h))
+                (if bias > 0.0 { -60.0 } else { w + 60.0 }, rng.range(0.0, h))
             } else {
                 (rng.range(-60.0, w + 60.0), -8.0)
             };
@@ -419,8 +462,6 @@ impl Sim {
                 life: f32::INFINITY,
             });
         }
-
-        let wind = 25.0 * (t * 0.13).sin() + 12.0 * (t * 0.51 + 1.0).sin();
 
         // курсор сгребает кучи
         for s in surfaces.values_mut() {
@@ -473,9 +514,9 @@ impl Sim {
             let k = if p.debris { m.debris_drag } else { m.drag };
             let swing = (t * m.sway_freq + p.phase).sin();
             let tx = if p.debris {
-                (wind + m.wind_bias) * 0.3 * m.wind + m.debris_sway * swing
+                (wind + bias_of(m)) * 0.3 * m.wind + m.debris_sway * swing
             } else {
-                (wind + m.wind_bias) * m.wind * (0.5 + size * 0.25) + m.sway * swing
+                (wind + bias_of(m)) * m.wind * (0.5 + size * 0.25) + m.sway * swing
             };
 
             // вихрь от курсора
@@ -777,6 +818,52 @@ mod tests {
         }
         let sn = snow.particles.len().max(1) as f32;
         assert!((snow.particles.iter().map(|p| p.vx).sum::<f32>() / sn).abs() < 60.0);
+    }
+
+    /// Средняя горизонтальная скорость частиц после 12 секунд снегопада при данном ветре.
+    fn mean_vx(kind: Kind, dir: WindDir, force: f32) -> f32 {
+        let mut s = sim();
+        s.set_kind(kind);
+        s.wind_dir = dir;
+        s.wind_force = force;
+        for _ in 0..(60 * 12) {
+            s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+        }
+        s.particles.iter().map(|p| p.vx).sum::<f32>() / s.particles.len().max(1) as f32
+    }
+
+    #[test]
+    fn wind_direction_and_force_steer_the_particles() {
+        let right = mean_vx(Kind::Snow, WindDir::Right, 1.0);
+        let left = mean_vx(Kind::Snow, WindDir::Left, 1.0);
+        let calm = mean_vx(Kind::Snow, WindDir::Calm, 1.0);
+        assert!(right > 20.0, "вправо: {right}");
+        assert!(left < -20.0, "влево: {left}");
+        assert!(calm.abs() < 12.0, "без ветра: {calm}");
+        // сильнее ветер — быстрее снос, слабее — медленнее
+        let strong = mean_vx(Kind::Snow, WindDir::Right, 2.0);
+        let weak = mean_vx(Kind::Snow, WindDir::Right, 0.5);
+        assert!(strong > right * 1.5 && weak < right * 0.75, "слабый {weak}, средний {right}, сильный {strong}");
+        // «как обычно» остаётся прежним качанием
+        assert!(mean_vx(Kind::Snow, WindDir::Auto, 1.0).abs() < 60.0);
+    }
+
+    #[test]
+    fn dust_storm_follows_the_chosen_wind() {
+        // против ветра по умолчанию: влево пыль залетает справа
+        let mut s = sim();
+        s.set_kind(Kind::Dust);
+        s.wind_dir = WindDir::Left;
+        for _ in 0..(60 * 12) {
+            s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+        }
+        let n = s.particles.len() as f32;
+        assert!(s.particles.iter().map(|p| p.vx).sum::<f32>() / n < -80.0);
+        assert!(s.particles.iter().filter(|p| p.x > s.w * 0.6 && p.y > s.h * 0.6).count() > 5);
+        // без ветра буря превращается в тихую пыль: ни сноса, ни залёта сбоку
+        assert!(mean_vx(Kind::Dust, WindDir::Calm, 1.0).abs() < 20.0);
+        // ураган сильнее обычной бури
+        assert!(mean_vx(Kind::Dust, WindDir::Right, 2.0) > mean_vx(Kind::Dust, WindDir::Right, 1.0) * 1.4);
     }
 
     #[test]
