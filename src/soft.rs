@@ -60,11 +60,28 @@ impl Canvas {
         for f in &looks {
             self.flake(f, scale);
         }
+        // небо — за окнами: по их рамкам картинка вырезается
+        if !looks.is_empty() {
+            for r in sim.window_rects() {
+                self.clear_rect(r.min_x() * scale, r.min_y() * scale, r.max_x() * scale, r.max_y() * scale);
+            }
+        }
         for p in &sim.particles {
             self.flake(&look::flake(p), scale);
         }
         // кучи поверх частиц — как и на видеокарте
         look::pile_runs(sim, |run, base, shadow| self.pile(run, base, shadow, scale));
+    }
+
+    /// Делает прямоугольник (в пикселях) полностью прозрачным.
+    fn clear_rect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
+        let (xa, xb) = (x0.round().max(0.0) as usize, (x1.round().max(0.0) as usize).min(self.width));
+        let (ya, yb) = (y0.round().max(0.0) as usize, (y1.round().max(0.0) as usize).min(self.height));
+        for y in ya..yb {
+            if xa < xb {
+                self.pixels[y * self.width + xa..y * self.width + xb].fill(0);
+            }
+        }
     }
 
     fn flake(&mut self, f: &look::FlakeLook, scale: f32) {
@@ -186,6 +203,31 @@ mod tests {
             let row = 199 * canvas.width;
             assert!(canvas.pixels[row + 110..row + 490].iter().any(|p| p >> 24 > 60), "{kind:?}: нет кучи");
         }
+    }
+
+    #[test]
+    fn sky_is_hidden_behind_windows() {
+        let mut sim = Sim::new(1);
+        sim.w = 960.0;
+        sim.h = 540.0;
+        sim.rate = 0.0;
+        let mut sun = sky(SkyMode::Sun);
+        sun.set_place(SkyPlace::Right); // солнце в (870, 96)
+        let alpha = |canvas: &Canvas, x: usize, y: usize| canvas.pixels[y * canvas.width + x] >> 24;
+
+        let mut open = Canvas::new();
+        open.draw(&sim, &sun, 1.0);
+        assert!(alpha(&open, 870, 96) > 200 && alpha(&open, 830, 96) > 200, "солнце не нарисовано");
+
+        // окно закрывает правую половину солнца и больше ничего
+        let win = [WindowInfo { id: 5, rect: Rect::new(870.0, 50.0, 400.0, 300.0) }];
+        sim.refresh(&win, None, 0.05);
+        let mut covered = Canvas::new();
+        covered.draw(&sim, &sun, 1.0);
+        assert_eq!(alpha(&covered, 880, 96), 0, "за окном небо должно пропасть");
+        assert_eq!(alpha(&covered, 940, 300), 0);
+        assert!(alpha(&covered, 830, 96) > 200, "вне окна небо остаётся");
+        assert_eq!(covered.pixels[96 * covered.width + 830], open.pixels[96 * open.width + 830]);
     }
 
     #[test]

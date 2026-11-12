@@ -37,6 +37,11 @@ struct PileVertex {
     color: [f32; 4],
 }
 
+const PILE_ATTRS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4];
+
+/// Сколько окон небо вырезает за кадр.
+const MAX_CUTS: usize = 256;
+
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -47,6 +52,10 @@ pub struct Renderer {
     bind_group: wgpu::BindGroup,
     flake_pipeline: wgpu::RenderPipeline,
     pile_pipeline: wgpu::RenderPipeline,
+    /// Вырезает прозрачные дыры по рамкам окон: заменяет цвет, а не смешивает.
+    cut_pipeline: wgpu::RenderPipeline,
+    cut_buf: wgpu::Buffer,
+    cut: Vec<PileVertex>,
     flake_buf: wgpu::Buffer,
     pile_buf: wgpu::Buffer,
     pile_cap: u64,
@@ -210,7 +219,13 @@ impl Renderer {
             blend: Some(blend),
             write_mask: wgpu::ColorWrites::ALL,
         })];
-        let pipeline = |label, vs, fs, buffer: wgpu::VertexBufferLayout| {
+        // вырез: поверх уже нарисованного кладётся прозрачный цвет, без смешивания
+        let cut_targets = [Some(wgpu::ColorTargetState {
+            format: config.format,
+            blend: Some(wgpu::BlendState::REPLACE),
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
+        let pipeline = |label, vs, fs, buffer: wgpu::VertexBufferLayout, targets: &[Option<wgpu::ColorTargetState>]| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -227,7 +242,7 @@ impl Renderer {
                     module: &shader,
                     entry_point: Some(fs),
                     compilation_options: Default::default(),
-                    targets: &targets,
+                    targets,
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -242,17 +257,21 @@ impl Renderer {
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x3, 3 => Float32x4],
             },
+            &targets,
         );
-        let pile_pipeline = pipeline(
-            "piles",
-            "vs_pile",
-            "fs_pile",
-            wgpu::VertexBufferLayout {
-                array_stride: size_of::<PileVertex>() as u64,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4],
-            },
-        );
+        let pile_layout = || wgpu::VertexBufferLayout {
+            array_stride: size_of::<PileVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &PILE_ATTRS,
+        };
+        let pile_pipeline = pipeline("piles", "vs_pile", "fs_pile", pile_layout(), &targets);
+        let cut_pipeline = pipeline("cuts", "vs_pile", "fs_pile", pile_layout(), &cut_targets);
+        let cut_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("cuts"),
+            size: (MAX_CUTS * 6 * size_of::<PileVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         let flake_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("flakes"),
@@ -273,6 +292,9 @@ impl Renderer {
             bind_group,
             flake_pipeline,
             pile_pipeline,
+            cut_pipeline,
+            cut_buf,
+            cut: Vec::new(),
             flake_buf,
             pile_buf,
             pile_cap,
@@ -353,9 +375,18 @@ impl Renderer {
             _ => return false,
         };
 
-        // небо рисуется под частицами
+        // небо рисуется под частицами и за окнами
         self.looks.clear();
         sky.looks(sim.w, sim.h, &mut self.looks);
+        let sky_n = self.looks.len();
+        self.cut.clear();
+        if sky_n > 0 {
+            for r in sim.window_rects().iter().take(MAX_CUTS) {
+                let (x0, y0, x1, y1) = (r.min_x(), r.min_y(), r.max_x(), r.max_y());
+                let v = |x, y| PileVertex { pos: [x, y], color: [0.0; 4] };
+                self.cut.extend([v(x0, y0), v(x1, y0), v(x0, y1), v(x0, y1), v(x1, y0), v(x1, y1)]);
+            }
+        }
         self.looks.extend(sim.particles.iter().take(MAX_PARTICLES).map(look::flake));
         self.flakes.clear();
         self.flakes.extend(self.looks.iter().map(|f| {
@@ -369,6 +400,9 @@ impl Renderer {
         self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         if !self.flakes.is_empty() {
             self.queue.write_buffer(&self.flake_buf, 0, bytemuck::cast_slice(&self.flakes));
+        }
+        if !self.cut.is_empty() {
+            self.queue.write_buffer(&self.cut_buf, 0, bytemuck::cast_slice(&self.cut));
         }
         let pile_bytes = (self.pile.len() * size_of::<PileVertex>()) as u64;
         if pile_bytes > self.pile_cap {
@@ -398,10 +432,21 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.bind_group, &[]);
-            if !self.flakes.is_empty() {
+            // порядок: небо, вырезы по окнам, частицы
+            pass.set_pipeline(&self.flake_pipeline);
+            pass.set_vertex_buffer(0, self.flake_buf.slice(..));
+            if sky_n > 0 {
+                pass.draw(0..6, 0..sky_n as u32);
+            }
+            if !self.cut.is_empty() {
+                pass.set_pipeline(&self.cut_pipeline);
+                pass.set_vertex_buffer(0, self.cut_buf.slice(0..(self.cut.len() * size_of::<PileVertex>()) as u64));
+                pass.draw(0..self.cut.len() as u32, 0..1);
                 pass.set_pipeline(&self.flake_pipeline);
                 pass.set_vertex_buffer(0, self.flake_buf.slice(..));
-                pass.draw(0..6, 0..self.flakes.len() as u32);
+            }
+            if self.flakes.len() > sky_n {
+                pass.draw(0..6, sky_n as u32..self.flakes.len() as u32);
             }
             if pile_bytes > 0 {
                 pass.set_pipeline(&self.pile_pipeline);
