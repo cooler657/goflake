@@ -28,12 +28,39 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
 
-      # macOS: приложение Goflake.app (сборка и подпись — в скрипте), в zip
+      # macOS: приложение Goflake.app (сборка и подпись — в скрипте), в zip.
+      # Если в репозитории заданы секреты Apple (MACOS_CERT_P12 и др.), приложение подписывается
+      # Developer ID и нотаризуется; без них (форки, запросы на слияние) — подпись «ad hoc».
       - name: Package (macOS)
         if: runner.os == 'macOS'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGN_ID: ${{ secrets.MACOS_SIGN_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
+          if [ -n "$MACOS_CERT_P12" ]; then
+            echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            KC="$RUNNER_TEMP/build.keychain-db"
+            security create-keychain -p ci "$KC"
+            security set-keychain-settings -lut 3600 "$KC"
+            security unlock-keychain -p ci "$KC"
+            security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci "$KC"
+            security list-keychains -d user -s "$KC" login.keychain-db
+            export SIGN_ID="$MACOS_SIGN_ID"
+          fi
           sh scripts/bundle-macos.sh
           ditto -c -k --keepParent dist/Goflake.app "${{ matrix.name }}.zip"
+          if [ -n "$SIGN_ID" ]; then
+            xcrun notarytool submit "${{ matrix.name }}.zip" --apple-id "$APPLE_ID" \
+              --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+            xcrun stapler staple dist/Goflake.app
+            rm "${{ matrix.name }}.zip"
+            ditto -c -k --keepParent dist/Goflake.app "${{ matrix.name }}.zip"
+          fi
 
       # Windows: один goflake.exe в zip
       - name: Package (Windows)
