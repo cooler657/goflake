@@ -82,7 +82,8 @@ pub fn looks(sim: &Sim, out: &mut Vec<FlakeLook>) {
             (Decor::Fir, Role::Animal) => sparrows(&it, t, out),
             (Decor::Fir, Role::Plain) => fir(&it, out),
             (Decor::Leafy, Role::Feature) => mushrooms(&it, out),
-            (Decor::Leafy, _) => leafy(&it, out),
+            (Decor::Leafy, Role::Animal) => frog(&it, t, out),
+            (Decor::Leafy, Role::Plain) => leafy(&it, out),
             (Decor::Cactus, Role::Feature) => tent(&it, t, out),
             (Decor::Cactus, Role::Animal) => lizard(&it, t, out),
             (Decor::Cactus, Role::Plain) => cactus(&it, out),
@@ -90,7 +91,8 @@ pub fn looks(sim: &Sim, out: &mut Vec<FlakeLook>) {
             (Decor::Bare, Role::Animal) => hedgehog(&it, t, out),
             (Decor::Bare, Role::Plain) => bare(&it, out),
             (Decor::Rocks, Role::Feature) => rover(&it, out),
-            (Decor::Rocks, _) => rocks(&it, out),
+            (Decor::Rocks, Role::Animal) => crater(&it, t, out),
+            (Decor::Rocks, Role::Plain) => rocks(&it, out),
         }
         if out.len() - start >= DECOR_MAX {
             break;
@@ -133,7 +135,7 @@ enum Role {
     /// Особое: зимой домик, весной грибы, в пустыне палатка с костром, осенью пугало
     /// с тыквой, на Марсе ровер.
     Feature,
-    /// Зверь: воробьи, ёжик, ящерица (у дождя и бури зверей нет — там обычное).
+    /// Зверь или другая «живая» вставка: воробьи, лягушка, ящерица, ёжик, дымящийся кратер.
     Animal,
     /// Обычное: дерево, кактус, камни.
     Plain,
@@ -487,6 +489,75 @@ fn lizard(it: &Item, t: f32, out: &mut Vec<FlakeLook>) {
     }
 }
 
+/// Лягушка после дождя: дышит горлом, моргает глазами навыкате и время от времени
+/// подпрыгивает на месте.
+fn frog(it: &Item, t: f32, out: &mut Vec<FlakeLook>) {
+    let (x, b) = (it.x, it.base);
+    let u = it.height * ANIMAL / 20.0;
+    let dir = flip(it.seed ^ 0x3d);
+    // прыжок: раз в четыре секунды короткая дуга вверх
+    let ph = (t / 4.0 + (it.seed % 97) as f32 * 0.13).fract();
+    let jump = if ph < 0.15 { (ph / 0.15 * std::f32::consts::PI).sin() * 4.0 } else { 0.0 };
+    let p = |lx: f32, ly: f32| [x + dir * lx * u, b - (ly + jump) * u];
+    let (green, dark, belly, spot) = ([0.35, 0.65, 0.25], [0.26, 0.52, 0.18], [0.82, 0.90, 0.55], [0.22, 0.46, 0.15]);
+    let thin = (0.6 * u).max(0.3);
+    // задняя нога сложена, передняя упирается; в прыжке они вытянуты
+    let reach = if jump > 0.0 { 1.0 } else { 0.0 };
+    out.push(bar(p(-2.5, 3.0), p(-4.0 - reach * 1.2, 1.2 + reach * 0.4), 1.4 * u, dark));
+    out.push(bar(p(-4.0 - reach * 1.2, 0.8 + reach * 0.4), p(-1.0 - reach * 2.0, 0.6 + reach * 0.4), thin, dark));
+    out.push(bar(p(2.0, 2.2), p(3.2 + reach * 0.8, 0.5), thin, dark));
+    // тело, светлое брюшко, пятна на спине, горло дышит
+    out.push(shape(p(0.0, 3.2), [4.0 * u, 3.0 * u], 0.0, green));
+    out.push(shape(p(0.6, 2.2), [3.0 * u, 1.5 * u], 0.0, belly));
+    for (sx, sy) in [(-1.2, 5.3), (0.8, 5.7)] {
+        out.push(circle(p(sx, sy), (0.6 * u).max(0.3), spot));
+    }
+    out.push(circle(p(4.3, 2.6), (0.9 + 0.3 * (t * 4.0).sin()) * u, belly));
+    // голова: рот, два глаза навыкате со зрачками
+    out.push(bar(p(3.4, 3.6), p(6.0, 3.5), (0.2 * u).max(0.25), [0.15, 0.30, 0.10]));
+    for (ex, ey) in [(2.2, 6.9), (3.8, 6.5)] {
+        out.push(circle(p(ex, ey), 1.2 * u, green));
+        out.push(circle(p(ex + 0.2, ey + 0.1), 0.85 * u, [0.98, 0.95, 0.70]));
+        out.push(circle(p(ex + 0.4, ey + 0.1), (0.45 * u).max(0.3), [0.08, 0.06, 0.04]));
+    }
+}
+
+/// Дымящийся кратер: бугристый вал, тлеющее дно, дым, который ветер сносит вбок, и искры.
+fn crater(it: &Item, t: f32, out: &mut Vec<FlakeLook>) {
+    let (x, b) = (it.x, it.base);
+    let u = it.height / 20.0;
+    let flick = 0.8 + 0.2 * (t * 5.0 + it.seed as f32).sin();
+    // красный отсвет лежит позади всего
+    out.push(glow([x, b - 3.0 * u], 7.0 * u, [1.0, 0.40, 0.12], 0.35 * flick));
+    // вал, тёмная яма, светлые грани и камни по краям
+    out.push(shape([x, b - 1.6 * u], [9.0 * u, 1.6 * u], 0.0, [0.52, 0.28, 0.17]));
+    out.push(shape([x, b - 2.3 * u], [5.5 * u, 0.9 * u], 0.0, [0.16, 0.08, 0.06]));
+    out.push(shape([x, b - 2.0 * u], [3.0 * u, 0.5 * u], 0.0, [1.0, 0.45, 0.15]));
+    out.push(shape([x - 6.0 * u, b - 2.8 * u], [3.0 * u, 0.8 * u], -0.15, [0.66, 0.36, 0.22]));
+    out.push(shape([x + 6.2 * u, b - 2.6 * u], [2.8 * u, 0.7 * u], 0.15, [0.62, 0.34, 0.20]));
+    out.push(circle([x - 10.5 * u, b - 1.0 * u], 1.0 * u, [0.50, 0.26, 0.16]));
+    out.push(circle([x + 11.0 * u, b - 0.8 * u], 0.8 * u, [0.46, 0.24, 0.15]));
+    // дым: облачка поднимаются, растут, сносятся ветром и тают
+    for i in 0..5 {
+        let ph = (t / 6.0 + i as f32 / 5.0).fract();
+        let c = [x + (ph * 5.0 + 1.5 * (ph * 5.0 + i as f32).sin()) * u, b - (3.0 + 16.0 * ph) * u];
+        let mut puff = circle(c, (1.2 + 3.2 * ph) * u, [0.30, 0.24, 0.22]);
+        puff.color[3] = 0.8 * (1.0 - ph);
+        out.push(puff);
+    }
+    // искры вылетают из ямы
+    for i in 0..3 {
+        let ph = (t / 1.5 + i as f32 / 3.0).fract();
+        let mut spark = circle(
+            [x + (2.0 * (ph * 7.0 + i as f32 * 2.0).sin()) * u, b - (3.0 + 7.0 * ph) * u],
+            (0.3 * u).max(0.3),
+            [1.0, 0.65, 0.25],
+        );
+        spark.color[3] = 1.0 - ph;
+        out.push(spark);
+    }
+}
+
 /// Дерево весной: тёмный ствол, пышная зелёная крона и розовые цветы.
 fn leafy(it: &Item, out: &mut Vec<FlakeLook>) {
     let (x, b, h) = (it.x, it.base, it.height);
@@ -717,7 +788,7 @@ mod tests {
     #[test]
     fn every_special_piece_stands_on_the_edge_and_stays_near_its_spot() {
         type Piece = fn(&Item, &mut Vec<FlakeLook>);
-        let pieces: [(&str, Piece); 7] = [
+        let pieces: [(&str, Piece); 9] = [
             ("грибы", mushrooms),
             ("пугало", scarecrow),
             ("палатка", |it, out| tent(it, 1.3, out)),
@@ -725,6 +796,8 @@ mod tests {
             ("воробьи", |it, out| sparrows(it, 1.3, out)),
             ("ёжик", |it, out| hedgehog(it, 1.3, out)),
             ("ящерица", |it, out| lizard(it, 0.7, out)),
+            ("лягушка", |it, out| frog(it, 0.2, out)),
+            ("кратер", |it, out| crater(it, 2.9, out)),
         ];
         for (name, piece) in pieces {
             for height in [12.0f32, 18.0, 25.0] {
