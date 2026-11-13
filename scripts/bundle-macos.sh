@@ -28,12 +28,5 @@ PLIST
 # Подпись «ad hoc» по умолчанию привязывает приложение к хэшу сборки, и разрешение в
 # Универсальном доступе слетает после каждой пересборки. Явное требование «по
 # идентификатору» этого не допускает: система узнаёт приложение по bundle id.
-if [ -n "$SIGN_ID" ]; then
-  # Релиз: подпись Developer ID с «усиленной средой выполнения» и меткой времени — без них
-  # нотаризацию не пройти. Требование по идентификатору здесь не нужно: у такой подписи оно
-  # и так привязано к команде разработчика и не меняется от сборки к сборке.
-  codesign --force --options runtime --timestamp -s "$SIGN_ID" "$APP"
-else
-  codesign --force -s - --requirements '=designated => identifier "local.goflake"' "$APP"
-fi
+codesign --force -s - --requirements '=designated => identifier "local.goflake"' "$APP"
 echo "Готово: $(pwd)/$APP"
