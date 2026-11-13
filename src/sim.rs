@@ -166,6 +166,8 @@ pub struct Sim {
     pub decor: bool,
     /// Курсор сгребает кучи в шары и холмики (иначе разбрасывает).
     pub gather: bool,
+    /// Во сколько раз кучи на кромках ниже предела материала (`Material::max_pile`).
+    pub pile_scale: f32,
     /// Шары, холмики и снеговики, которые собрал курсор.
     pub heaps: Vec<heap::Heap>,
     solids: Vec<Rect>,
@@ -246,6 +248,7 @@ impl Sim {
             wind_force: 1.0,
             decor: true,
             gather: true,
+            pile_scale: 1.0,
             heaps: Vec::new(),
             solids: Vec::new(),
             t: 0.0,
@@ -272,6 +275,18 @@ impl Sim {
             dump(s, (0.0, 0.0), &mut self.particles, &mut self.rng, self.kind, false);
         }
         self.kind = kind;
+    }
+
+    /// Меняет предел высоты куч. Если он стал меньше, накопленные кучи осыпаются
+    /// (масса остаётся частицами и ложится заново уже в новый предел): иначе кучи
+    /// выше предела так и стояли бы, не принимая ничего нового.
+    pub fn set_pile_scale(&mut self, scale: f32) {
+        if scale < self.pile_scale {
+            for s in self.surfaces.values_mut() {
+                dump(s, (0.0, 0.0), &mut self.particles, &mut self.rng, self.kind, true);
+            }
+        }
+        self.pile_scale = scale;
     }
 
     /// Сбрасывает все кучи — материал падает вниз.
@@ -420,10 +435,11 @@ impl Sim {
         } else if !self.heaps.is_empty() {
             self.drop_all_heaps(true);
         }
-        let Sim { w, h, particles, surfaces, kind, rate, rate_scale, solid, wind_dir, wind_force, decor: _, gather: _, heaps: _, solids, t, spawn_acc, rng } = self;
+        let Sim { w, h, particles, surfaces, kind, rate, rate_scale, solid, wind_dir, wind_force, decor: _, gather: _, pile_scale, heaps: _, solids, t, spawn_acc, rng } = self;
         let (w, h, solid, kind, wind_dir, force) = (*w, *h, *solid, *kind, *wind_dir, *wind_force);
         // материал, который падает сейчас и из которого состоят кучи
         let mat = kind.material();
+        let max_pile = mat.max_pile * *pile_scale;
         *t += dt;
         let t = *t;
 
@@ -488,7 +504,7 @@ impl Sim {
 
         // курсор сгребает кучи
         for s in surfaces.values_mut() {
-            if gather_on || !(c.1 > s.y - mat.max_pile - CURSOR_R - 4.0 && c.1 < s.y + CURSOR_R) || s.h.is_empty() {
+            if gather_on || !(c.1 > s.y - max_pile - CURSOR_R - 4.0 && c.1 < s.y + CURSOR_R) || s.h.is_empty() {
                 continue;
             }
             let a = (((c.0 - CURSOR_R - s.x0) / COL_W).floor() as isize).max(0);
@@ -563,7 +579,7 @@ impl Sim {
             let mut dead = p.life <= 0.0 || p.y > h + 12.0 || p.x < -80.0 || p.x > w + 80.0;
             if !dead && (p.land || (solid && p.life.is_infinite())) && p.vy > 0.0 && p.kind == kind {
                 for s in surfaces.values_mut() {
-                    if !(p.y >= s.y - mat.max_pile - 60.0 && prev_y <= s.y + 2.0) {
+                    if !(p.y >= s.y - max_pile - 60.0 && prev_y <= s.y + 2.0) {
                         continue;
                     }
                     let col = ((p.x - s.x0) / COL_W).floor();
@@ -578,7 +594,7 @@ impl Sim {
                     if p.y < top {
                         continue;
                     }
-                    let fill = s.h[col] / mat.max_pile;
+                    let fill = s.h[col] / max_pile;
                     if p.debris || rng.range(0.0, 1.0) > fill * fill {
                         deposit(s, col, p.mass);
                         dead = true;
@@ -782,6 +798,38 @@ mod tests {
                 "частица оказалась поверх содержимого окна"
             );
         }
+    }
+
+    #[test]
+    fn smaller_pile_scale_keeps_piles_lower_and_loses_no_mass() {
+        let win = [WindowInfo { id: 7, rect: Rect::new(200.0, 300.0, 400.0, 300.0) }];
+        let peak = |scale: f32| {
+            let mut s = sim();
+            s.pile_scale = scale;
+            let mut peak = 0.0f32;
+            for _ in 0..(60 * 90) {
+                s.refresh(&win, None, 0.05);
+                s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+                peak = peak.max(s.surfaces[&7].h.iter().copied().fold(0.0, f32::max));
+            }
+            peak
+        };
+        let (full, small) = (peak(1.0), peak(0.4));
+        assert!(small < full * 0.7, "кучи не стали ниже: {small} против {full}");
+
+        // уменьшили предел у готовых куч — они осыпались, а масса сохранилась частицами
+        let mut s = sim();
+        s.rate = 0.0;
+        s.refresh(&win, None, 0.05);
+        for h in s.surfaces.get_mut(&7).unwrap().h.iter_mut() {
+            *h = 5.0;
+        }
+        s.set_pile_scale(0.5);
+        assert_eq!(s.surfaces[&7].h.iter().sum::<f32>(), 0.0);
+        assert!(s.particles.iter().map(|p| p.mass).sum::<f32>() > 0.0);
+        // увеличили — ничего не трогаем
+        s.set_pile_scale(1.0);
+        assert_eq!(s.pile_scale, 1.0);
     }
 
     #[test]

@@ -11,6 +11,10 @@ use crate::sky::{MODES, PLACES, SkyMode, SkyPlace};
 /// (для других материалов умножается на `Material::rate`).
 pub const RATES: [(&str, f32); 3] = [("Слабо", 15.0), ("Умеренно", 40.0), ("Сильно", 110.0)];
 
+/// Размеры куч: подпись в меню и во сколько раз кучи ниже предела материала.
+pub const PILE_SIZES: [(&str, f32); 4] =
+    [("Крошечные", 0.25), ("Маленькие", 0.5), ("Средние", 0.75), ("Большие (как раньше)", 1.0)];
+
 /// Название пункта «выбирать осадки по календарю».
 pub const SCENE_AUTO: &str = "По времени года";
 /// Число вариантов в меню осадков: «по времени года» и по одному на материал.
@@ -66,6 +70,8 @@ pub struct Settings {
     pub wind: usize,
     /// Сила ветра: номер в `WIND_FORCES`.
     pub wind_force: usize,
+    /// Размер куч: номер в `PILE_SIZES`.
+    pub pile: usize,
     /// Режим «не засыпать содержимое окон».
     pub solid: bool,
     /// Украшения на верхней кромке окон.
@@ -78,7 +84,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { rate: 1, scene: 0, sky: 1, sky_place: 2, wind: 0, wind_force: 1, solid: false, decor: true, gather: true, gpu: true }
+        Self { rate: 1, scene: 0, sky: 1, sky_place: 2, wind: 0, wind_force: 1, pile: 1, solid: false, decor: true, gather: true, gpu: true }
     }
 }
 
@@ -122,6 +128,11 @@ impl Settings {
                         s.wind_force = i.min(WIND_FORCES.len() - 1);
                     }
                 }
+                ("pile", v) => {
+                    if let Ok(i) = v.parse::<usize>() {
+                        s.pile = i.min(PILE_SIZES.len() - 1);
+                    }
+                }
                 ("solid", v) => s.solid = v == "1" || v == "true",
                 ("decor", v) => s.decor = v != "0" && v != "false",
                 ("gather", v) => s.gather = v != "0" && v != "false",
@@ -142,19 +153,25 @@ impl Settings {
             let _ = fs::create_dir_all(dir);
         }
         let text =
-            format!("rate={}\nscene={}\nsky={}\nsky_place={}\nwind={}\nwind_force={}\nsolid={}\ndecor={}\ngather={}\ngpu={}\n",
+            format!("rate={}\nscene={}\nsky={}\nsky_place={}\nwind={}\nwind_force={}\npile={}\nsolid={}\ndecor={}\ngather={}\ngpu={}\n",
                 self.rate,
                 self.scene,
                 self.sky,
                 self.sky_place,
                 self.wind,
                 self.wind_force,
+                self.pile,
                 self.solid as u8,
                 self.decor as u8,
                 self.gather as u8,
                 self.gpu as u8
             );
         let _ = fs::write(p, text);
+    }
+
+    /// Во сколько раз кучи ниже предела материала.
+    pub fn pile_scale(&self) -> f32 {
+        PILE_SIZES[self.pile.min(PILE_SIZES.len() - 1)].1
     }
 
     /// Куда должен дуть ветер.
@@ -190,12 +207,12 @@ mod tests {
     #[test]
     fn parses_and_ignores_garbage() {
         assert_eq!(
-            Settings::parse("rate=2\nscene=3\nsky=2\nsky_place=1\nwind=2\nwind_force=3\nsolid=1\ndecor=0\ngather=0\ngpu=0\n"),
-            Settings { rate: 2, scene: 3, sky: 2, sky_place: 1, wind: 2, wind_force: 3, solid: true, decor: false, gather: false, gpu: false }
+            Settings::parse("rate=2\nscene=3\nsky=2\nsky_place=1\nwind=2\nwind_force=3\npile=2\nsolid=1\ndecor=0\ngather=0\ngpu=0\n"),
+            Settings { rate: 2, scene: 3, sky: 2, sky_place: 1, wind: 2, wind_force: 3, pile: 2, solid: true, decor: false, gather: false, gpu: false }
         );
         assert_eq!(
-            Settings::parse("rate=99\nчто-то\nscene=99\nsky=99\nsky_place=99\nwind=99\nwind_force=99\nsolid=0"),
-            Settings { rate: 2, scene: 5, sky: 3, sky_place: 2, wind: 3, wind_force: 3, solid: false, decor: true, gather: true, gpu: true }
+            Settings::parse("rate=99\nчто-то\nscene=99\nsky=99\nsky_place=99\nwind=99\nwind_force=99\npile=99\nsolid=0"),
+            Settings { rate: 2, scene: 5, sky: 3, sky_place: 2, wind: 3, wind_force: 3, pile: 3, solid: false, decor: true, gather: true, gpu: true }
         );
         assert_eq!(Settings::parse(""), Settings::default());
     }
@@ -223,5 +240,7 @@ mod tests {
         assert_eq!(Settings::default().wind_force_value(), 1.0);
         assert_eq!(wind(2, 0).wind_dir(), WindDir::Left);
         assert_eq!(wind(3, 3).wind_force_value(), 3.5);
+        assert_eq!(Settings::default().pile_scale(), 0.5);
+        assert_eq!(Settings { pile: 3, ..Settings::default() }.pile_scale(), 1.0);
     }
 }

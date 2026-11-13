@@ -63,6 +63,7 @@ fn new_sim(settings: &Settings, seed: u64, low_power: bool) -> Sim {
     sim.solid = settings.solid;
     sim.decor = settings.decor;
     sim.gather = settings.gather;
+    sim.pile_scale = settings.pile_scale();
     sim.wind_dir = settings.wind_dir();
     sim.wind_force = settings.wind_force_value();
     sim.set_kind(settings.kind());
@@ -110,6 +111,7 @@ impl App {
             wind: self.settings.wind,
             wind_force: self.settings.wind_force,
             rate: self.settings.rate,
+            pile: self.settings.pile,
             solid: self.settings.solid,
             decor: self.settings.decor,
             gather: self.settings.gather,
@@ -365,6 +367,12 @@ impl App {
                 self.screens.iter_mut().for_each(|s| s.sim.rate = rate);
                 self.settings.save();
             }
+            Cmd::Pile(i) => {
+                self.settings.pile = i.min(settings::PILE_SIZES.len() - 1);
+                let scale = self.settings.pile_scale();
+                self.screens.iter_mut().for_each(|s| s.sim.set_pile_scale(scale));
+                self.settings.save();
+            }
             Cmd::Solid => {
                 self.settings.solid = !self.settings.solid;
                 let on = self.settings.solid;
@@ -510,6 +518,7 @@ fn main() {
             wind: settings.wind,
             wind_force: settings.wind_force,
             rate: settings.rate,
+            pile: settings.pile,
             solid: settings.solid,
             decor: settings.decor,
             gather: settings.gather,
@@ -546,11 +555,12 @@ mod tests {
 
     #[test]
     fn a_new_sim_carries_the_settings_and_the_power_mode() {
-        let st = Settings { rate: 2, wind: 1, wind_force: 3, solid: true, decor: false, gather: false, ..Settings::default() };
+        let st = Settings { rate: 2, wind: 1, wind_force: 3, pile: 0, solid: true, decor: false, gather: false, ..Settings::default() };
         let sim = new_sim(&st, 1, true);
         assert_eq!(sim.rate, RATES[2].1);
         assert_eq!(sim.rate_scale, POWER_SAVING_RATE);
         assert!(sim.solid && !sim.decor && !sim.gather);
+        assert_eq!(sim.pile_scale, 0.25);
         assert_eq!(new_sim(&st, 1, false).rate_scale, 1.0);
     }
 }

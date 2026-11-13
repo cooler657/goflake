@@ -6,7 +6,7 @@
 
 use winit::event_loop::EventLoopProxy;
 
-use crate::settings::{CURSOR_MODES, PLACE_COUNT, RATES, SCENES, SKIES, WIND_DIRS, WIND_FORCES, place_label, scene_label, sky_label};
+use crate::settings::{CURSOR_MODES, PILE_SIZES, PLACE_COUNT, RATES, SCENES, SKIES, WIND_DIRS, WIND_FORCES, place_label, scene_label, sky_label};
 
 /// Команда из меню. Она же — пользовательское событие цикла событий.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -23,6 +23,8 @@ pub enum Cmd {
     /// Сила ветра: номер в `settings::WIND_FORCES`.
     WindForce(usize),
     Rate(usize),
+    /// Размер куч: номер в `settings::PILE_SIZES`.
+    Pile(usize),
     Solid,
     /// Показать или спрятать украшения на окнах.
     Decor,
@@ -47,6 +49,7 @@ pub struct MenuState {
     pub wind: usize,
     pub wind_force: usize,
     pub rate: usize,
+    pub pile: usize,
     pub solid: bool,
     pub decor: bool,
     pub gather: bool,
@@ -65,6 +68,7 @@ const L_SCENES: &str = "Осадки";
 const L_SKY: &str = "Небо";
 const L_WIND: &str = "Ветер";
 const L_RATE: &str = "Интенсивность";
+const L_PILE: &str = "Размер куч";
 const L_SOLID: &str = "Не засыпать содержимое окон";
 const L_DECOR: &str = "Украшения на окнах (деревья, кактусы)";
 const L_CURSOR: &str = "Курсор";
@@ -127,6 +131,7 @@ mod imp {
         winds: Vec<CheckMenuItem>,
         forces: Vec<CheckMenuItem>,
         rates: Vec<CheckMenuItem>,
+        piles: Vec<CheckMenuItem>,
         solid: CheckMenuItem,
         decor: CheckMenuItem,
         cursors: Vec<CheckMenuItem>,
@@ -158,6 +163,8 @@ mod imp {
                     Cmd::WindForce(i)
                 } else if let Some(i) = num("cursor") {
                     Cmd::Cursor(i)
+                } else if let Some(i) = num("pile") {
+                    Cmd::Pile(i)
                 } else {
                     Cmd::Rate(num("rate")?)
                 }
@@ -225,6 +232,11 @@ mod imp {
                 let rates = radio(&sub, "rate", &rate_labels, state.rate)?;
                 menu.append(&sub)?;
 
+                let sub = Submenu::new(L_PILE, true);
+                let pile_labels: Vec<&str> = PILE_SIZES.iter().map(|p| p.0).collect();
+                let piles = radio(&sub, "pile", &pile_labels, state.pile)?;
+                menu.append(&sub)?;
+
                 menu.append(&sep())?;
                 let solid = CheckMenuItem::with_id("solid", L_SOLID, true, state.solid, None);
                 menu.append(&solid)?;
@@ -247,9 +259,9 @@ mod imp {
                 menu.append(&adapter)?;
                 menu.append(&sep())?;
                 menu.append(&MenuItem::with_id("quit", L_QUIT, true, None))?;
-                Ok((menu, running, scenes, skies, places, winds, forces, rates, solid, decor, cursors, dock, gpu, adapter))
+                Ok((menu, running, scenes, skies, places, winds, forces, rates, piles, solid, decor, cursors, dock, gpu, adapter))
             };
-            let (menu, running, scenes, skies, places, winds, forces, rates, solid, decor, cursors, dock, gpu, adapter) =
+            let (menu, running, scenes, skies, places, winds, forces, rates, piles, solid, decor, cursors, dock, gpu, adapter) =
                 build().map_err(|e| e.to_string())?;
 
             MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
@@ -268,7 +280,7 @@ mod imp {
             let builder = builder.with_icon(icon([205, 230, 255])?);
             let tray = builder.build().map_err(|e| e.to_string())?;
 
-            Ok(Self { _icon: tray, running, scenes, skies, places, winds, forces, rates, solid, decor, cursors, dock, gpu, adapter })
+            Ok(Self { _icon: tray, running, scenes, skies, places, winds, forces, rates, piles, solid, decor, cursors, dock, gpu, adapter })
         }
 
         /// Приводит галочки в соответствие с состоянием приложения.
@@ -283,6 +295,7 @@ mod imp {
             check(&self.winds, state.wind);
             check(&self.forces, state.wind_force);
             check(&self.rates, state.rate);
+            check(&self.piles, state.pile);
             self.solid.set_checked(state.solid);
             self.decor.set_checked(state.decor);
             check(&self.cursors, state.gather as usize);
@@ -376,6 +389,7 @@ mod imp {
                 ),
                 submenu(L_CURSOR, vec![radio(s.gather as usize, CURSOR_MODES.to_vec(), Cmd::Cursor)]),
                 submenu(L_RATE, vec![radio(s.rate, RATES.iter().map(|r| r.0).collect(), Cmd::Rate)]),
+                submenu(L_PILE, vec![radio(s.pile, PILE_SIZES.iter().map(|p| p.0).collect(), Cmd::Pile)]),
                 MenuItem::Separator,
                 CheckmarkItem {
                     label: L_SOLID.into(),
