@@ -16,11 +16,11 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            name: Snowdrift-macos-arm64
+            name: Goflake-macos-arm64
           - os: windows-latest
-            name: Snowdrift-windows-x64
+            name: Goflake-windows-x64
           - os: ubuntu-latest
-            name: Snowdrift-linux-x64
+            name: Goflake-linux-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,20 +28,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
 
-      # macOS: приложение Snowdrift.app (сборка и подпись — в скрипте), в zip
+      # macOS: приложение Goflake.app (сборка и подпись — в скрипте), в zip
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
           sh scripts/bundle-macos.sh
-          ditto -c -k --keepParent dist/Snowdrift.app "${{ matrix.name }}.zip"
+          ditto -c -k --keepParent dist/Goflake.app "${{ matrix.name }}.zip"
 
-      # Windows: один snowdrift.exe в zip
+      # Windows: один goflake.exe в zip
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           cargo build --release --locked
-          Compress-Archive -Path target/release/snowdrift.exe -DestinationPath "${{ matrix.name }}.zip"
+          Compress-Archive -Path target/release/goflake.exe -DestinationPath "${{ matrix.name }}.zip"
 
       # Linux: бинарник, значок и файл для меню приложений в tar.gz
       - name: Package (Linux)
@@ -49,7 +49,7 @@ jobs:
         run: |
           cargo build --release --locked
           mkdir stage
-          cp target/release/snowdrift assets/snowdrift.desktop assets/snowdrift-256.png stage/
+          cp target/release/goflake assets/goflake.desktop assets/goflake-256.png stage/
           tar -C stage -czf "${{ matrix.name }}.tar.gz" .
 
       - uses: actions/upload-artifact@v4

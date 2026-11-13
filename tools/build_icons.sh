@@ -1,23 +1,23 @@
 #!/bin/sh
 # Делает из assets/icon-1024.png все остальные форматы иконки:
-#   assets/Snowdrift.icns     — macOS (значок приложения)
-#   assets/icon.ico           — Windows (встраивается в snowdrift.exe)
-#   assets/snowdrift-256.png  — Linux (рядом лежит snowdrift.desktop)
+#   assets/Goflake.icns     — macOS (значок приложения)
+#   assets/icon.ico           — Windows (встраивается в goflake.exe)
+#   assets/goflake-256.png  — Linux (рядом лежит goflake.desktop)
 # Нужны macOS-инструменты sips и iconutil. Сама картинка — tools/make_icon.py.
 set -e
 cd "$(dirname "$0")/.."
 python3 tools/make_icon.py assets/icon-1024.png
 
-SET=$(mktemp -d)/Snowdrift.iconset
+SET=$(mktemp -d)/Goflake.iconset
 mkdir -p "$SET"
 resize() { sips -z "$1" "$1" assets/icon-1024.png --out "$2" >/dev/null; }
 for s in 16 32 128 256 512; do
   resize "$s" "$SET/icon_${s}x${s}.png"
   resize "$((s * 2))" "$SET/icon_${s}x${s}@2x.png"
 done
-iconutil -c icns "$SET" -o assets/Snowdrift.icns
+iconutil -c icns "$SET" -o assets/Goflake.icns
 
-resize 256 assets/snowdrift-256.png
+resize 256 assets/goflake-256.png
 
 # .ico: PNG внутри, как понимают Windows Vista и новее
 TMP=$(mktemp -d)

@@ -423,14 +423,14 @@ mod tests {
     }
 
     /// Сохраняет кадры всех уборщиков, чтобы посмотреть на них глазами. Запуск:
-    /// `SNOWDRIFT_DUMP=/папка cargo test dump_vehicles -- --ignored`; формат — как у
+    /// `GOFLAKE_DUMP=/папка cargo test dump_vehicles -- --ignored`; формат — как у
     /// `soft::tests::dump_preview` (`имя.raw` и `имя.txt`).
     #[test]
     #[ignore]
     fn dump_vehicles() {
         use crate::clock::Clock;
         use crate::sky::{Sky, SkyMode};
-        let Some(dir) = std::env::var_os("SNOWDRIFT_DUMP") else { return };
+        let Some(dir) = std::env::var_os("GOFLAKE_DUMP") else { return };
         let dir = std::path::PathBuf::from(dir);
         for v in VEHICLES {
             let mut s = sim_with_pile(0.0);

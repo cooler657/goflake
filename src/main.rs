@@ -238,8 +238,8 @@ impl App {
         }
         let clk = clock::now();
         let kind = self.settings.kind();
-        // SNOWDRIFT_LOW_POWER=1 включает облегчённый режим принудительно (для проверки)
-        let low_power = self.platform.low_power() || std::env::var_os("SNOWDRIFT_LOW_POWER").is_some();
+        // GOFLAKE_LOW_POWER=1 включает облегчённый режим принудительно (для проверки)
+        let low_power = self.platform.low_power() || std::env::var_os("GOFLAKE_LOW_POWER").is_some();
         if low_power != self.low_power {
             eprintln!("сугроб: энергосбережение {}", if low_power { "включено — осадков меньше, кадры реже" } else { "выключено" });
             self.low_power = low_power;

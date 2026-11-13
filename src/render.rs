@@ -136,7 +136,7 @@ impl Renderer {
         let Some((surface, adapter)) = found else { return Err(last_err) };
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("snowdrift"),
+            label: Some("goflake"),
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
             ..Default::default()
         }))
@@ -155,7 +155,7 @@ impl Renderer {
             .find(|m| caps.alpha_modes.contains(m))
             .unwrap_or(caps.alpha_modes[0]);
         // Непрозрачная поверхность закрыла бы собой весь экран — лучше не запускаться вовсе.
-        if config.alpha_mode == A::Opaque && std::env::var_os("SNOWDRIFT_ALLOW_OPAQUE").is_none() {
+        if config.alpha_mode == A::Opaque && std::env::var_os("GOFLAKE_ALLOW_OPAQUE").is_none() {
             return Err(format!(
                 "графическая система не даёт прозрачное окно (доступно: {:?}); \
                  в Linux нужен композитор",

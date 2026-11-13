@@ -1,4 +1,4 @@
-//! Встраивает значок в `snowdrift.exe` при сборке под Windows.
+//! Встраивает значок в `goflake.exe` при сборке под Windows.
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");

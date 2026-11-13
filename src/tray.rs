@@ -366,7 +366,7 @@ mod imp {
 
     impl ksni::Tray for Model {
         fn id(&self) -> String {
-            "snowdrift".into()
+            "goflake".into()
         }
 
         fn title(&self) -> String {

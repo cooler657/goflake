@@ -332,13 +332,13 @@ mod tests {
     }
 
     /// Сохраняет кадры, чтобы посмотреть на них глазами. Запуск:
-    /// `SNOWDRIFT_DUMP=/папка cargo test dump_preview -- --ignored`.
+    /// `GOFLAKE_DUMP=/папка cargo test dump_preview -- --ignored`.
     /// Каждый кадр — файл `имя.raw` (байты B, G, R, A, цвет умножен на альфу)
     /// и `имя.txt` с шириной и высотой.
     #[test]
     #[ignore]
     fn dump_preview() {
-        let Some(dir) = std::env::var_os("SNOWDRIFT_DUMP") else { return };
+        let Some(dir) = std::env::var_os("GOFLAKE_DUMP") else { return };
         let dir = std::path::PathBuf::from(dir);
         let save = |name: &str, canvas: &Canvas| {
             let bytes: Vec<u8> = canvas.pixels.iter().flat_map(|p| p.to_le_bytes()).collect();

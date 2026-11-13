@@ -98,7 +98,18 @@ impl Default for Settings {
 }
 
 fn path() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("goflake").join("settings.conf"))
+}
+
+/// Где лежали настройки, пока приложение называлось Snowdrift. Если новой папки ещё нет,
+/// настройки подхватываются оттуда, а при первом сохранении уходят в новую.
+fn legacy_path() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join("snowdrift").join("settings.conf"))
+}
+
+/// Первый из файлов, который удалось прочитать.
+fn read_first(paths: impl IntoIterator<Item = Option<PathBuf>>) -> Option<String> {
+    paths.into_iter().flatten().find_map(|p| fs::read_to_string(p).ok())
 }
 
 impl Settings {
@@ -163,7 +174,7 @@ impl Settings {
     }
 
     pub fn load() -> Self {
-        path().and_then(|p| fs::read_to_string(p).ok()).map(|t| Self::parse(&t)).unwrap_or_default()
+        read_first([path(), legacy_path()]).map(|t| Self::parse(&t)).unwrap_or_default()
     }
 
     pub fn save(&self) {
@@ -246,6 +257,22 @@ mod tests {
             Settings { rate: 2, scene: 5, sky: 3, sky_place: 2, wind: 3, wind_force: 3, pile: 3, plow: 3, plow_kind: 4, solid: false, decor: true, gather: true, gpu: true }
         );
         assert_eq!(Settings::parse(""), Settings::default());
+    }
+
+    #[test]
+    fn settings_come_from_the_new_folder_and_fall_back_to_the_old_one() {
+        let dir = std::env::temp_dir().join(format!("goflake-settings-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let (new, old, none) = (dir.join("new.conf"), dir.join("old.conf"), dir.join("missing.conf"));
+        fs::write(&old, "rate=2").unwrap();
+        // нового файла нет — читается старый
+        assert_eq!(read_first([Some(none.clone()), Some(old.clone())]).as_deref(), Some("rate=2"));
+        // новый есть — он главнее старого
+        fs::write(&new, "rate=0").unwrap();
+        assert_eq!(read_first([Some(new), Some(old)]).as_deref(), Some("rate=0"));
+        // ничего нет (или путь неизвестен) — настроек нет
+        assert_eq!(read_first([Some(none), None]), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -888,6 +888,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "goflake"
+version = "0.3.5"
+dependencies = [
+ "bytemuck",
+ "dirs",
+ "ksni",
+ "libc",
+ "objc2 0.6.5",
+ "pollster",
+ "tray-icon",
+ "wgpu",
+ "windows-sys 0.61.2",
+ "winit",
+ "winresource",
+ "x11rb 0.14.0",
+]
+
+[[package]]
 name = "gpu-allocator"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2246,24 +2264,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "snowdrift"
-version = "0.3.4"
-dependencies = [
- "bytemuck",
- "dirs",
- "ksni",
- "libc",
- "objc2 0.6.5",
- "pollster",
- "tray-icon",
- "wgpu",
- "windows-sys 0.61.2",
- "winit",
- "winresource",
- "x11rb 0.14.0",
 ]
 
 [[package]]

@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
 Name=Сугроб
-Name[en]=Snowdrift
+Name[en]=Goflake
 Comment=Снег, дождь, песок и листья поверх рабочего стола
 Comment[en]=Snow, rain, sand and leaves over your desktop
-Exec=snowdrift
-Icon=snowdrift
+Exec=goflake
+Icon=goflake
 Terminal=false
 Categories=Utility;

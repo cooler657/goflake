@@ -1,4 +1,4 @@
-# Сугроб (Snowdrift)
+# Сугроб (Goflake)
 
 Осадки поверх рабочего стола: снег, дождь, песок, листья и марсианская
 пыльная буря — по времени года или на выбор. Они падают, ложатся кучами на верхние кромки окон и на низ
@@ -39,7 +39,7 @@ Windows и Linux собраны и проверены компилятором �
 секунду вместо 60). Определяется само: «Режим энергосбережения» в macOS,
 «Экономия заряда» в Windows, профиль питания «power-saver» в Linux (если ядро
 его сообщает). Для проверки режим можно включить принудительно переменной
-окружения `SNOWDRIFT_LOW_POWER=1`.
+окружения `GOFLAKE_LOW_POWER=1`.
 
 **Полноэкранные игры и видео.** Если какое-то окно закрыло весь монитор
 (полноэкранное приложение, игра, видео), осадки над этим монитором встают на
@@ -129,13 +129,13 @@ Windows и Linux собраны и проверены компилятором �
 cargo run --release
 ```
 
-Готовый файл — `target/release/snowdrift` (`snowdrift.exe` в Windows).
+Готовый файл — `target/release/goflake` (`goflake.exe` в Windows).
 
 **macOS.** Чтобы получить приложение, которое запускается двойным щелчком:
 
 ```sh
 sh scripts/bundle-macos.sh
-open dist/Snowdrift.app
+open dist/Goflake.app
 ```
 
 **Linux.** Нужны X11-сеанс (или XWayland), композитор и оконный менеджер с
@@ -150,17 +150,17 @@ open dist/Snowdrift.app
 
 | Файл | Куда идёт |
 | --- | --- |
-| `assets/Snowdrift.icns` | macOS: кладётся в `Snowdrift.app` скриптом `bundle-macos.sh` |
-| `assets/icon.ico` | Windows: встраивается в `snowdrift.exe` при сборке (`build.rs`) |
-| `assets/snowdrift-256.png`, `assets/snowdrift.desktop` | Linux: лежат в архиве релиза рядом с бинарником |
+| `assets/Goflake.icns` | macOS: кладётся в `Goflake.app` скриптом `bundle-macos.sh` |
+| `assets/icon.ico` | Windows: встраивается в `goflake.exe` при сборке (`build.rs`) |
+| `assets/goflake-256.png`, `assets/goflake.desktop` | Linux: лежат в архиве релиза рядом с бинарником |
 
 Чтобы поставить приложение в меню программ в Linux:
 
 ```sh
 mkdir -p ~/.local/bin ~/.local/share/applications ~/.local/share/icons/hicolor/256x256/apps
-cp snowdrift ~/.local/bin/
-cp snowdrift.desktop ~/.local/share/applications/
-cp snowdrift-256.png ~/.local/share/icons/hicolor/256x256/apps/snowdrift.png
+cp goflake ~/.local/bin/
+cp goflake.desktop ~/.local/share/applications/
+cp goflake-256.png ~/.local/share/icons/hicolor/256x256/apps/goflake.png
 ```
 
 Значок в трее и строке меню — другой, одноцветный: он рисуется в коде
@@ -179,14 +179,14 @@ git push origin v0.3.0
 ```
 
 Actions соберёт приложение на macOS, Windows и Linux, упакует и приложит к
-новому релизу на GitHub: `Snowdrift-macos-arm64.zip` (приложение
-`Snowdrift.app`), `Snowdrift-windows-x64.zip` (`snowdrift.exe`) и
-`Snowdrift-linux-x64.tar.gz` (бинарник, значок и файл `.desktop`). Описание релиза создаётся из коммитов. Перед
+новому релизу на GitHub: `Goflake-macos-arm64.zip` (приложение
+`Goflake.app`), `Goflake-windows-x64.zip` (`goflake.exe`) и
+`Goflake-linux-x64.tar.gz` (бинарник, значок и файл `.desktop`). Описание релиза создаётся из коммитов. Перед
 тегом версию в `Cargo.toml` стоит поднять до той же.
 
 Файлы не подписаны сертификатом разработчика, поэтому системы предупредят:
 - **macOS** — «приложение повреждено» или «неизвестный разработчик». Нужно один
-  раз выполнить `xattr -dr com.apple.quarantine Snowdrift.app` или открыть
+  раз выполнить `xattr -dr com.apple.quarantine Goflake.app` или открыть
   приложение через контекстное меню «Открыть».
 - **Windows** — окно SmartScreen: «Подробнее» → «Выполнить в любом случае».
 
@@ -219,7 +219,7 @@ Actions соберёт приложение на macOS, Windows и Linux, упа
 
 Все настройки меню (осадки, небо, интенсивность, режим окон, способ
 отрисовки) запоминаются между запусками в файле
-`snowdrift/settings.conf` в папке настроек пользователя
+`goflake/settings.conf` в папке настроек пользователя
 (`~/Library/Application Support`, `%APPDATA%`, `~/.config`).
 
 ## Разрешения
@@ -232,15 +232,15 @@ Actions соберёт приложение на macOS, Windows и Linux, упа
 панель задач видна без разрешений.
 
 `scripts/bundle-macos.sh` подписывает приложение с требованием «по
-идентификатору» (`identifier "local.snowdrift"`), поэтому разрешение
+идентификатору» (`identifier "local.goflake"`), поэтому разрешение
 переживает пересборки. Обычная подпись «ad hoc» привязывает приложение к
 хэшу конкретной сборки: переключатель в Системных настройках при этом остаётся
 включённым, но относится к старой сборке, и приложение просит доступ снова и
 снова. Если так случилось (например, у приложения, собранного старой
-версией скрипта), нужно один раз выбрать Snowdrift.app в «Конфиденциальность и
+версией скрипта), нужно один раз выбрать Goflake.app в «Конфиденциальность и
 безопасность → Универсальный доступ», нажать «−», затем нажать в меню
 «Ложиться на Dock» и включить переключатель заново. Сбросить запись можно и
-командой `tccutil reset Accessibility local.snowdrift`.
+командой `tccutil reset Accessibility local.goflake`.
 
 ## Как это устроено
 
@@ -439,7 +439,7 @@ cargo test
 Чтобы посмотреть кадры глазами, есть игнорируемый по умолчанию тест:
 
 ```sh
-SNOWDRIFT_DUMP=/папка cargo test dump_preview -- --ignored
+GOFLAKE_DUMP=/папка cargo test dump_preview -- --ignored
 ```
 
 Он пишет небо в разное время суток, фазы луны и четыре вида осадков в файлы
