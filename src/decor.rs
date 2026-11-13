@@ -21,6 +21,18 @@ pub struct Item {
     pub base: f32,
     pub height: f32,
     pub seed: u32,
+    /// Что это: обычное, особое или зверь.
+    pub role: Role,
+    /// Какой высоты куча под украшением: зверя поднимают на неё, иначе снег, который рисуется
+    /// поверх украшений, закрывает его почти целиком (воробей ниже кучи).
+    pub lift: f32,
+}
+
+impl Item {
+    #[cfg(test)]
+    fn at(x: f32, base: f32, height: f32, seed: u32) -> Self {
+        Self { x, base, height, seed, role: Role::Plain, lift: 0.0 }
+    }
 }
 
 fn shape(center: [f32; 2], half: [f32; 2], rotation: f32, rgb: [f32; 3]) -> FlakeLook {
@@ -61,7 +73,17 @@ pub fn plan(sim: &Sim) -> Vec<Item> {
             if !seen || x < 0.0 || x > sim.w {
                 continue;
             }
-            items.push(Item { x, base: s.y, height: (48.0 + 50.0 * hash01(seed ^ 0x5bd1)) / 4.0, seed });
+            // куча под украшением: среднее по узкой полосе столбиков
+            let (a, b) = ((col - 6).max(0) as usize, ((col + 6) as usize).min(s.h.len() - 1));
+            let lift = s.h[a..=b].iter().sum::<f32>() / (b - a + 1) as f32;
+            items.push(Item {
+                x,
+                base: s.y,
+                height: (48.0 + 50.0 * hash01(seed ^ 0x5bd1)) / 4.0,
+                seed,
+                role: assign(id, k, n, seed),
+                lift,
+            });
         }
     }
     items
@@ -76,7 +98,9 @@ pub fn looks(sim: &Sim, out: &mut Vec<FlakeLook>) {
     let start = out.len();
     let t = sim.time();
     for it in plan(sim) {
-        match (kind, role(&it)) {
+        // зверь сидит на снегу, а не тонет в куче под ним
+        let it = if it.role == Role::Animal { Item { base: it.base - it.lift, ..it } } else { it };
+        match (kind, it.role) {
             (Decor::None, _) => {}
             (Decor::Fir, Role::Feature) => house(&it, t, out),
             (Decor::Fir, Role::Animal) => sparrows(&it, t, out),
@@ -129,9 +153,29 @@ fn fir(it: &Item, out: &mut Vec<FlakeLook>) {
     out.push(circle([x, b - h + thick * 0.3], thick * 0.7, [0.97, 0.98, 1.0]));
 }
 
+/// Роли мест на одном окне. Если мест несколько, ровно одно занимает зверь и ровно одно —
+/// особое украшение, в разных местах кромки; остальные обычные. Так живность не собирается
+/// кучками в одних окнах и не пропадает целиком в других. Зависит только от номера окна,
+/// поэтому не мигает.
+fn assign(id: i64, k: usize, n: usize, seed: u32) -> Role {
+    if n < 2 {
+        return pick(seed);
+    }
+    let h = |salt: u32| hash01((id as u32).wrapping_mul(0x9E37_79B1).wrapping_add(salt));
+    let animal = ((h(11) * n as f32) as usize).min(n - 1);
+    let feature = (animal + 1 + ((h(23) * (n - 1) as f32) as usize).min(n - 2)) % n;
+    if k == animal {
+        Role::Animal
+    } else if k == feature {
+        Role::Feature
+    } else {
+        Role::Plain
+    }
+}
+
 /// Что стоит на месте украшения.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Role {
+pub enum Role {
     /// Особое: зимой домик, весной грибы, в пустыне палатка с костром, осенью пугало
     /// с тыквой, на Марсе ровер.
     Feature,
@@ -141,10 +185,10 @@ enum Role {
     Plain,
 }
 
-/// Роль украшения: четверть особых, треть зверей, остальное обычные. Определяется зерном,
-/// как и положение, поэтому не мигает.
-fn role(it: &Item) -> Role {
-    let r = hash01(it.seed ^ 0x4f1d);
+/// Роль украшения по одному зерну (когда на окне одно место): четверть особых, треть
+/// зверей, остальное обычные.
+fn pick(seed: u32) -> Role {
+    let r = hash01(seed ^ 0x4f1d);
     if r < 0.25 {
         Role::Feature
     } else if r < 0.6 {
@@ -401,7 +445,9 @@ fn sparrows(it: &Item, t: f32, out: &mut Vec<FlakeLook>) {
     let (body, wing, belly, tail, head) =
         ([0.56, 0.38, 0.24], [0.40, 0.26, 0.16], [0.84, 0.74, 0.60], [0.38, 0.25, 0.16], [0.50, 0.34, 0.22]);
     // (смещение, размер, фаза клевания)
-    for (i, (dx, s, ph)) in [(-7.0, 1.0, 0.0), (0.0, 0.85, 2.1), (6.8, 0.95, 4.2)].into_iter().enumerate() {
+    for (i, (dx, s, ph)) in [(-9.5, 1.0, 0.0), (0.0, 0.85, 2.1), (9.3, 0.95, 4.2)].into_iter().enumerate() {
+        // птички сидят врозь, каждая чуть в стороне от своего места
+        let dx = dx + (hash01(it.seed.wrapping_add(i as u32 * 7)) - 0.5) * 2.0;
         let dir = flip(it.seed.wrapping_add(i as u32 * 31));
         let k = u * s;
         let p = |lx: f32, ly: f32| [x + dx * u + dir * lx * k, b - ly * k];
@@ -713,14 +759,14 @@ mod tests {
     #[test]
     fn a_quarter_features_and_a_third_animals_and_they_stand_on_the_edge() {
         let items: Vec<Item> = (0..600u32)
-            .map(|i| Item { x: 500.0, base: 300.0, height: 20.0, seed: i.wrapping_mul(2_654_435_761) })
+            .map(|i| Item::at(500.0, 300.0, 20.0, i.wrapping_mul(2_654_435_761)))
             .collect();
-        let n = items.iter().filter(|it| role(it) == Role::Feature).count();
+        let n = items.iter().filter(|it| pick(it.seed) == Role::Feature).count();
         assert!((100..=200).contains(&n), "особых украшений {n} из 600");
-        let animals = items.iter().filter(|it| role(it) == Role::Animal).count();
+        let animals = items.iter().filter(|it| pick(it.seed) == Role::Animal).count();
         assert!((160..=260).contains(&animals), "зверей {animals} из 600");
         for height in [12.0f32, 18.0, 25.0] {
-            let it = Item { x: 500.0, base: 300.0, height, seed: 7 };
+            let it = Item::at(500.0, 300.0, height, 7);
             for t in [0.0f32, 1.7, 4.9] {
                 let mut out = Vec::new();
                 house(&it, t, &mut out);
@@ -735,7 +781,7 @@ mod tests {
         }
         // дом выше ёлки того же размера
         let (mut h, mut f) = (Vec::new(), Vec::new());
-        let it = Item { x: 500.0, base: 300.0, height: 20.0, seed: 1 };
+        let it = Item::at(500.0, 300.0, 20.0, 1);
         house(&it, 0.0, &mut h);
         fir(&it, &mut f);
         let top = |v: &Vec<FlakeLook>| v.iter().filter(|s| s.color[3] > 0.99).map(|s| s.center[1] - s.half[1]).fold(f32::MAX, f32::min);
@@ -761,7 +807,7 @@ mod tests {
             // шесть окон подряд: три с особым украшением, три со зверем (если они есть у вида)
             let want = |r: Role| -> Vec<i64> {
                 (1..400i64)
-                    .filter(|id| role(&Item { x: 0.0, base: 0.0, height: 20.0, seed: (*id as u32).wrapping_mul(2_654_435_761) }) == r)
+                    .filter(|id| pick((*id as u32).wrapping_mul(2_654_435_761)) == r)
                     .take(3)
                     .collect()
             };
@@ -802,7 +848,7 @@ mod tests {
         for (name, piece) in pieces {
             for height in [12.0f32, 18.0, 25.0] {
                 for seed in [1u32, 2, 3, 4, 5, 6] {
-                    let it = Item { x: 500.0, base: 300.0, height, seed };
+                    let it = Item::at(500.0, 300.0, height, seed);
                     let mut out = Vec::new();
                     piece(&it, &mut out);
                     assert!(out.len() >= 8 && out.len() <= 70, "{name}: {} фигур", out.len());
@@ -810,18 +856,81 @@ mod tests {
                         assert!(f.center[0].is_finite() && f.center[1].is_finite(), "{name}");
                         assert!((0.0..=1.0).contains(&f.color[3]), "{name}: прозрачность {}", f.color[3]);
                         assert!(f.center[1] < 300.0, "{name}: фигура ниже кромки: {:?}", f.center);
-                        assert!((f.center[0] - 500.0).abs() <= height * 2.0, "{name}: вылезла вбок: {:?}", f.center);
+                        assert!((f.center[0] - 500.0).abs() <= height * 2.4, "{name}: вылезла вбок: {:?}", f.center);
                     }
                 }
             }
         }
         // костёр мерцает: пламя в разные моменты разной высоты, но не пропадает
-        let it = Item { x: 500.0, base: 300.0, height: 20.0, seed: 9 };
+        let it = Item::at(500.0, 300.0, 20.0, 9);
         let (mut a, mut b) = (Vec::new(), Vec::new());
         tent(&it, 0.0, &mut a);
         tent(&it, 0.35, &mut b);
         assert_eq!(a.len(), b.len());
         assert!(a.iter().zip(&b).any(|(p, q)| p.center != q.center || p.color != q.color));
+    }
+
+    #[test]
+    fn roles_are_spread_evenly_for_real_window_handles_too() {
+        // номера окон Windows (HWND) чётные и редко идут подряд; доли ролей не должны перекашиваться
+        // ни у одного из четырёх мест на кромке
+        for stride in [2i64, 4, 8, 16, 0x10] {
+            for k in 0..4u32 {
+                let (mut feature, mut animal) = (0, 0);
+                let n = 2000;
+                for i in 0..n {
+                    let id = 0x10000 + i as i64 * stride;
+                    let seed = (id as u32).wrapping_mul(2_654_435_761).wrapping_add(k * 977);
+                    match pick(seed) {
+                        Role::Feature => feature += 1,
+                        Role::Animal => animal += 1,
+                        Role::Plain => {}
+                    }
+                }
+                assert!((380..=620).contains(&feature), "шаг {stride}, место {k}: особых {feature} из {n}");
+                assert!((600..=800).contains(&animal), "шаг {stride}, место {k}: зверей {animal} из {n}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_wide_window_gets_one_animal_and_one_special_in_different_places() {
+        for width in [560.0f32, 800.0, 1100.0, 1600.0] {
+            for id in 1..120i64 {
+                let mut s = Sim::new(1);
+                s.w = 2000.0;
+                s.h = 900.0;
+                s.refresh(&[WindowInfo { id, rect: Rect::new(100.0, 300.0, width, 400.0) }], None, 0.05);
+                let items = plan(&s);
+                if items.len() < 2 {
+                    continue;
+                }
+                let animals = items.iter().filter(|i| i.role == Role::Animal).count();
+                let features = items.iter().filter(|i| i.role == Role::Feature).count();
+                // не больше по одному; ровно по одному, если все места видны
+                assert!(animals <= 1 && features <= 1, "ширина {width}, окно {id}: зверей {animals}, особых {features}");
+                if items.len() == ((width - 16.0) / 260.0).clamp(1.0, 4.0) as usize {
+                    assert_eq!((animals, features), (1, 1), "ширина {width}, окно {id}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_animal_stands_on_top_of_the_pile_under_it() {
+        let mut s = sim_with(Rect::new(100.0, 300.0, 1100.0, 400.0));
+        for h in s.surfaces.get_mut(&5).unwrap().h.iter_mut() {
+            *h = 6.0;
+        }
+        let items = plan(&s);
+        assert!(items.iter().all(|i| (i.lift - 6.0).abs() < 0.01), "{items:?}");
+        let animal = items.iter().find(|i| i.role == Role::Animal).expect("на широком окне есть зверь");
+        // зверь, поднятый на кучу, целиком выше её верха; без подъёма его ноги были бы в снегу
+        let (mut lifted, mut plain) = (Vec::new(), Vec::new());
+        sparrows(&Item { base: animal.base - animal.lift, ..*animal }, 0.0, &mut lifted);
+        sparrows(animal, 0.0, &mut plain);
+        assert!(lifted.iter().all(|f| f.center[1] < 300.0 - 6.0));
+        assert!(plain.iter().any(|f| f.center[1] > 300.0 - 6.0));
     }
 
     #[test]
