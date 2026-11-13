@@ -64,6 +64,8 @@ fn new_sim(settings: &Settings, seed: u64, low_power: bool) -> Sim {
     sim.decor = settings.decor;
     sim.gather = settings.gather;
     sim.pile_scale = settings.pile_scale();
+    sim.plow.every = settings.plow_every();
+    sim.plow.vehicle = settings.plow_vehicle();
     sim.wind_dir = settings.wind_dir();
     sim.wind_force = settings.wind_force_value();
     sim.set_kind(settings.kind());
@@ -112,6 +114,8 @@ impl App {
             wind_force: self.settings.wind_force,
             rate: self.settings.rate,
             pile: self.settings.pile,
+            plow: self.settings.plow,
+            plow_kind: self.settings.plow_kind,
             solid: self.settings.solid,
             decor: self.settings.decor,
             gather: self.settings.gather,
@@ -373,6 +377,18 @@ impl App {
                 self.screens.iter_mut().for_each(|s| s.sim.set_pile_scale(scale));
                 self.settings.save();
             }
+            Cmd::Plow(i) => {
+                self.settings.plow = i.min(settings::PLOW_MODES.len() - 1);
+                let every = self.settings.plow_every();
+                self.screens.iter_mut().for_each(|s| s.sim.plow.set_every(every));
+                self.settings.save();
+            }
+            Cmd::PlowKind(i) => {
+                self.settings.plow_kind = i.min(sim::plow::VEHICLES.len() - 1);
+                let v = self.settings.plow_vehicle();
+                self.screens.iter_mut().for_each(|s| s.sim.plow.vehicle = v);
+                self.settings.save();
+            }
             Cmd::Solid => {
                 self.settings.solid = !self.settings.solid;
                 let on = self.settings.solid;
@@ -519,6 +535,8 @@ fn main() {
             wind_force: settings.wind_force,
             rate: settings.rate,
             pile: settings.pile,
+            plow: settings.plow,
+            plow_kind: settings.plow_kind,
             solid: settings.solid,
             decor: settings.decor,
             gather: settings.gather,
@@ -561,6 +579,7 @@ mod tests {
         assert_eq!(sim.rate_scale, POWER_SAVING_RATE);
         assert!(sim.solid && !sim.decor && !sim.gather);
         assert_eq!(sim.pile_scale, 0.25);
+        assert_eq!(sim.plow.every, 60.0);
         assert_eq!(new_sim(&st, 1, false).rate_scale, 1.0);
     }
 }

@@ -6,7 +6,8 @@
 
 use winit::event_loop::EventLoopProxy;
 
-use crate::settings::{CURSOR_MODES, PILE_SIZES, PLACE_COUNT, RATES, SCENES, SKIES, WIND_DIRS, WIND_FORCES, place_label, scene_label, sky_label};
+use crate::sim::plow::VEHICLES;
+use crate::settings::{CURSOR_MODES, PILE_SIZES, PLACE_COUNT, PLOW_MODES, RATES, SCENES, SKIES, WIND_DIRS, WIND_FORCES, place_label, scene_label, sky_label};
 
 /// Команда из меню. Она же — пользовательское событие цикла событий.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -25,6 +26,10 @@ pub enum Cmd {
     Rate(usize),
     /// Размер куч: номер в `settings::PILE_SIZES`.
     Pile(usize),
+    /// Как часто выезжает уборщик: номер в `settings::PLOW_MODES`.
+    Plow(usize),
+    /// Кто чистит: номер в `sim::plow::VEHICLES`.
+    PlowKind(usize),
     Solid,
     /// Показать или спрятать украшения на окнах.
     Decor,
@@ -50,6 +55,8 @@ pub struct MenuState {
     pub wind_force: usize,
     pub rate: usize,
     pub pile: usize,
+    pub plow: usize,
+    pub plow_kind: usize,
     pub solid: bool,
     pub decor: bool,
     pub gather: bool,
@@ -69,6 +76,7 @@ const L_SKY: &str = "Небо";
 const L_WIND: &str = "Ветер";
 const L_RATE: &str = "Интенсивность";
 const L_PILE: &str = "Размер куч";
+const L_PLOW: &str = "Уборщик (панель задач / Dock)";
 const L_SOLID: &str = "Не засыпать содержимое окон";
 const L_DECOR: &str = "Украшения на окнах (деревья, кактусы)";
 const L_CURSOR: &str = "Курсор";
@@ -132,6 +140,8 @@ mod imp {
         forces: Vec<CheckMenuItem>,
         rates: Vec<CheckMenuItem>,
         piles: Vec<CheckMenuItem>,
+        plows: Vec<CheckMenuItem>,
+        vehicles: Vec<CheckMenuItem>,
         solid: CheckMenuItem,
         decor: CheckMenuItem,
         cursors: Vec<CheckMenuItem>,
@@ -165,6 +175,10 @@ mod imp {
                     Cmd::Cursor(i)
                 } else if let Some(i) = num("pile") {
                     Cmd::Pile(i)
+                } else if let Some(i) = num("plow") {
+                    Cmd::Plow(i)
+                } else if let Some(i) = num("pkind") {
+                    Cmd::PlowKind(i)
                 } else {
                     Cmd::Rate(num("rate")?)
                 }
@@ -237,6 +251,14 @@ mod imp {
                 let piles = radio(&sub, "pile", &pile_labels, state.pile)?;
                 menu.append(&sub)?;
 
+                let sub = Submenu::new(L_PLOW, true);
+                let plow_labels: Vec<&str> = PLOW_MODES.iter().map(|p| p.0).collect();
+                let plows = radio(&sub, "plow", &plow_labels, state.plow)?;
+                sub.append(&sep())?;
+                let vehicle_labels: Vec<&str> = VEHICLES.iter().map(|v| v.label()).collect();
+                let vehicles = radio(&sub, "pkind", &vehicle_labels, state.plow_kind)?;
+                menu.append(&sub)?;
+
                 menu.append(&sep())?;
                 let solid = CheckMenuItem::with_id("solid", L_SOLID, true, state.solid, None);
                 menu.append(&solid)?;
@@ -259,9 +281,9 @@ mod imp {
                 menu.append(&adapter)?;
                 menu.append(&sep())?;
                 menu.append(&MenuItem::with_id("quit", L_QUIT, true, None))?;
-                Ok((menu, running, scenes, skies, places, winds, forces, rates, piles, solid, decor, cursors, dock, gpu, adapter))
+                Ok((menu, running, scenes, skies, places, winds, forces, rates, piles, plows, vehicles, solid, decor, cursors, dock, gpu, adapter))
             };
-            let (menu, running, scenes, skies, places, winds, forces, rates, piles, solid, decor, cursors, dock, gpu, adapter) =
+            let (menu, running, scenes, skies, places, winds, forces, rates, piles, plows, vehicles, solid, decor, cursors, dock, gpu, adapter) =
                 build().map_err(|e| e.to_string())?;
 
             MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
@@ -280,7 +302,7 @@ mod imp {
             let builder = builder.with_icon(icon([205, 230, 255])?);
             let tray = builder.build().map_err(|e| e.to_string())?;
 
-            Ok(Self { _icon: tray, running, scenes, skies, places, winds, forces, rates, piles, solid, decor, cursors, dock, gpu, adapter })
+            Ok(Self { _icon: tray, running, scenes, skies, places, winds, forces, rates, piles, plows, vehicles, solid, decor, cursors, dock, gpu, adapter })
         }
 
         /// Приводит галочки в соответствие с состоянием приложения.
@@ -296,6 +318,8 @@ mod imp {
             check(&self.forces, state.wind_force);
             check(&self.rates, state.rate);
             check(&self.piles, state.pile);
+            check(&self.plows, state.plow);
+            check(&self.vehicles, state.plow_kind);
             self.solid.set_checked(state.solid);
             self.decor.set_checked(state.decor);
             check(&self.cursors, state.gather as usize);
@@ -390,6 +414,14 @@ mod imp {
                 submenu(L_CURSOR, vec![radio(s.gather as usize, CURSOR_MODES.to_vec(), Cmd::Cursor)]),
                 submenu(L_RATE, vec![radio(s.rate, RATES.iter().map(|r| r.0).collect(), Cmd::Rate)]),
                 submenu(L_PILE, vec![radio(s.pile, PILE_SIZES.iter().map(|p| p.0).collect(), Cmd::Pile)]),
+                submenu(
+                    L_PLOW,
+                    vec![
+                        radio(s.plow, PLOW_MODES.iter().map(|p| p.0).collect(), Cmd::Plow),
+                        MenuItem::Separator,
+                        radio(s.plow_kind, VEHICLES.iter().map(|v| v.label()).collect(), Cmd::PlowKind),
+                    ],
+                ),
                 MenuItem::Separator,
                 CheckmarkItem {
                     label: L_SOLID.into(),

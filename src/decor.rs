@@ -27,12 +27,12 @@ fn shape(center: [f32; 2], half: [f32; 2], rotation: f32, rgb: [f32; 3]) -> Flak
     FlakeLook { center, half, rotation, shape: FlakeShape::Capsule, color: [rgb[0], rgb[1], rgb[2], 1.0] }
 }
 
-fn circle(c: [f32; 2], r: f32, rgb: [f32; 3]) -> FlakeLook {
+pub(crate) fn circle(c: [f32; 2], r: f32, rgb: [f32; 3]) -> FlakeLook {
     shape(c, [r, r], 0.0, rgb)
 }
 
 /// Отрезок толщиной `2r` со скруглёнными концами от `p0` до `p1`.
-fn bar(p0: [f32; 2], p1: [f32; 2], r: f32, rgb: [f32; 3]) -> FlakeLook {
+pub(crate) fn bar(p0: [f32; 2], p1: [f32; 2], r: f32, rgb: [f32; 3]) -> FlakeLook {
     let (dx, dy) = (p1[0] - p0[0], p1[1] - p0[1]);
     let len = (dx * dx + dy * dy).sqrt();
     shape([(p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0], [len / 2.0 + r, r], dy.atan2(dx), rgb)

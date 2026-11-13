@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use crate::materials::{Gather, Kind};
 
 pub mod heap;
+pub mod plow;
 
 /// Ширина столбика кучи.
 pub const COL_W: f32 = 2.0;
@@ -170,6 +171,8 @@ pub struct Sim {
     pub pile_scale: f32,
     /// Шары, холмики и снеговики, которые собрал курсор.
     pub heaps: Vec<heap::Heap>,
+    /// Уборщик на кромке панели задач или Dock.
+    pub plow: plow::Plow,
     solids: Vec<Rect>,
     t: f32,
     spawn_acc: f32,
@@ -250,6 +253,7 @@ impl Sim {
             gather: true,
             pile_scale: 1.0,
             heaps: Vec::new(),
+            plow: plow::Plow::default(),
             solids: Vec::new(),
             t: 0.0,
             spawn_acc: 0.0,
@@ -435,7 +439,8 @@ impl Sim {
         } else if !self.heaps.is_empty() {
             self.drop_all_heaps(true);
         }
-        let Sim { w, h, particles, surfaces, kind, rate, rate_scale, solid, wind_dir, wind_force, decor: _, gather: _, pile_scale, heaps: _, solids, t, spawn_acc, rng } = self;
+        self.plow_step(dt);
+        let Sim { w, h, particles, surfaces, kind, rate, rate_scale, solid, wind_dir, wind_force, decor: _, gather: _, pile_scale, heaps: _, plow: _, solids, t, spawn_acc, rng } = self;
         let (w, h, solid, kind, wind_dir, force) = (*w, *h, *solid, *kind, *wind_dir, *wind_force);
         // материал, который падает сейчас и из которого состоят кучи
         let mat = kind.material();

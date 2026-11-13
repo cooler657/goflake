@@ -8,6 +8,7 @@ use winit::window::Window;
 use crate::decor::{self, DECOR_MAX};
 use crate::look::{self, FEATHER_PX, FlakeLook, SHADOW_PX, SHADOW_RGB};
 use crate::sim::heap::{self, HEAP_MAX};
+use crate::sim::plow::{self, PLOW_MAX};
 use crate::sim::{MAX_PARTICLES, Sim};
 use crate::sky::{SKY_MAX, Sky};
 
@@ -277,7 +278,7 @@ impl Renderer {
 
         let flake_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("flakes"),
-            size: ((MAX_PARTICLES + SKY_MAX + DECOR_MAX + HEAP_MAX) * size_of::<Flake>()) as u64,
+            size: ((MAX_PARTICLES + SKY_MAX + DECOR_MAX + HEAP_MAX + PLOW_MAX) * size_of::<Flake>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -300,8 +301,8 @@ impl Renderer {
             flake_buf,
             pile_buf,
             pile_cap,
-            flakes: Vec::with_capacity(MAX_PARTICLES + SKY_MAX + DECOR_MAX + HEAP_MAX),
-            looks: Vec::with_capacity(MAX_PARTICLES + SKY_MAX + DECOR_MAX + HEAP_MAX),
+            flakes: Vec::with_capacity(MAX_PARTICLES + SKY_MAX + DECOR_MAX + HEAP_MAX + PLOW_MAX),
+            looks: Vec::with_capacity(MAX_PARTICLES + SKY_MAX + DECOR_MAX + HEAP_MAX + PLOW_MAX),
             pile: Vec::new(),
             info,
             adapter: short,
@@ -424,6 +425,7 @@ impl Renderer {
         decor::looks(sim, &mut self.looks);
         // шары и кучи, собранные курсором
         heap::looks(sim, &mut self.looks);
+        plow::looks(sim, &mut self.looks);
         self.looks.extend(sim.particles.iter().take(MAX_PARTICLES).map(look::flake));
         self.flakes.clear();
         self.flakes.extend(self.looks.iter().map(|f| {

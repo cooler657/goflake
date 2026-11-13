@@ -9,7 +9,7 @@
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 use crate::decor;
-use crate::sim::heap;
+use crate::sim::{heap, plow};
 use crate::look::{self, FEATHER_PX, FlakeShape, SHADOW_PX, SHADOW_RGB};
 use crate::sim::Sim;
 use crate::sky::Sky;
@@ -98,6 +98,7 @@ impl Canvas {
         let mut decor_looks = Vec::new();
         decor::looks(sim, &mut decor_looks);
         heap::looks(sim, &mut decor_looks);
+        plow::looks(sim, &mut decor_looks);
         for f in &decor_looks {
             self.flake(f, scale);
         }

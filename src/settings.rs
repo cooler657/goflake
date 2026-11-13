@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::materials::{KINDS, Kind};
 use crate::sim::WindDir;
+use crate::sim::plow::{VEHICLES, Vehicle};
 use crate::sky::{MODES, PLACES, SkyMode, SkyPlace};
 
 /// Интенсивности: название и число снежинок в секунду на 1000 точек ширины
@@ -14,6 +15,10 @@ pub const RATES: [(&str, f32); 3] = [("Слабо", 15.0), ("Умеренно", 
 /// Размеры куч: подпись в меню и во сколько раз кучи ниже предела материала.
 pub const PILE_SIZES: [(&str, f32); 4] =
     [("Крошечные", 0.25), ("Маленькие", 0.5), ("Средние", 0.75), ("Большие (как раньше)", 1.0)];
+
+/// Как часто выезжает уборщик: подпись в меню и пауза между выездами в секундах
+/// (0 — не выезжает совсем).
+pub const PLOW_MODES: [(&str, f32); 4] = [("Выключен", 0.0), ("Редко", 180.0), ("Обычно", 60.0), ("Часто", 20.0)];
 
 /// Название пункта «выбирать осадки по календарю».
 pub const SCENE_AUTO: &str = "По времени года";
@@ -72,6 +77,10 @@ pub struct Settings {
     pub wind_force: usize,
     /// Размер куч: номер в `PILE_SIZES`.
     pub pile: usize,
+    /// Как часто выезжает уборщик: номер в `PLOW_MODES`.
+    pub plow: usize,
+    /// Кто чистит: номер в `sim::plow::VEHICLES`.
+    pub plow_kind: usize,
     /// Режим «не засыпать содержимое окон».
     pub solid: bool,
     /// Украшения на верхней кромке окон.
@@ -84,7 +93,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { rate: 1, scene: 0, sky: 1, sky_place: 2, wind: 0, wind_force: 1, pile: 1, solid: false, decor: true, gather: true, gpu: true }
+        Self { rate: 1, scene: 0, sky: 1, sky_place: 2, wind: 0, wind_force: 1, pile: 1, plow: 2, plow_kind: 0, solid: false, decor: true, gather: true, gpu: true }
     }
 }
 
@@ -133,6 +142,16 @@ impl Settings {
                         s.pile = i.min(PILE_SIZES.len() - 1);
                     }
                 }
+                ("plow", v) => {
+                    if let Ok(i) = v.parse::<usize>() {
+                        s.plow = i.min(PLOW_MODES.len() - 1);
+                    }
+                }
+                ("plow_kind", v) => {
+                    if let Ok(i) = v.parse::<usize>() {
+                        s.plow_kind = i.min(VEHICLES.len() - 1);
+                    }
+                }
                 ("solid", v) => s.solid = v == "1" || v == "true",
                 ("decor", v) => s.decor = v != "0" && v != "false",
                 ("gather", v) => s.gather = v != "0" && v != "false",
@@ -153,7 +172,7 @@ impl Settings {
             let _ = fs::create_dir_all(dir);
         }
         let text =
-            format!("rate={}\nscene={}\nsky={}\nsky_place={}\nwind={}\nwind_force={}\npile={}\nsolid={}\ndecor={}\ngather={}\ngpu={}\n",
+            format!("rate={}\nscene={}\nsky={}\nsky_place={}\nwind={}\nwind_force={}\npile={}\nplow={}\nplow_kind={}\nsolid={}\ndecor={}\ngather={}\ngpu={}\n",
                 self.rate,
                 self.scene,
                 self.sky,
@@ -161,6 +180,8 @@ impl Settings {
                 self.wind,
                 self.wind_force,
                 self.pile,
+                self.plow,
+                self.plow_kind,
                 self.solid as u8,
                 self.decor as u8,
                 self.gather as u8,
@@ -172,6 +193,16 @@ impl Settings {
     /// Во сколько раз кучи ниже предела материала.
     pub fn pile_scale(&self) -> f32 {
         PILE_SIZES[self.pile.min(PILE_SIZES.len() - 1)].1
+    }
+
+    /// Пауза между выездами уборщика, секунд (0 — выключен).
+    pub fn plow_every(&self) -> f32 {
+        PLOW_MODES[self.plow.min(PLOW_MODES.len() - 1)].1
+    }
+
+    /// Кто должен чистить кромку.
+    pub fn plow_vehicle(&self) -> Vehicle {
+        VEHICLES[self.plow_kind.min(VEHICLES.len() - 1)]
     }
 
     /// Куда должен дуть ветер.
@@ -207,12 +238,12 @@ mod tests {
     #[test]
     fn parses_and_ignores_garbage() {
         assert_eq!(
-            Settings::parse("rate=2\nscene=3\nsky=2\nsky_place=1\nwind=2\nwind_force=3\npile=2\nsolid=1\ndecor=0\ngather=0\ngpu=0\n"),
-            Settings { rate: 2, scene: 3, sky: 2, sky_place: 1, wind: 2, wind_force: 3, pile: 2, solid: true, decor: false, gather: false, gpu: false }
+            Settings::parse("rate=2\nscene=3\nsky=2\nsky_place=1\nwind=2\nwind_force=3\npile=2\nplow=3\nplow_kind=4\nsolid=1\ndecor=0\ngather=0\ngpu=0\n"),
+            Settings { rate: 2, scene: 3, sky: 2, sky_place: 1, wind: 2, wind_force: 3, pile: 2, plow: 3, plow_kind: 4, solid: true, decor: false, gather: false, gpu: false }
         );
         assert_eq!(
-            Settings::parse("rate=99\nчто-то\nscene=99\nsky=99\nsky_place=99\nwind=99\nwind_force=99\npile=99\nsolid=0"),
-            Settings { rate: 2, scene: 5, sky: 3, sky_place: 2, wind: 3, wind_force: 3, pile: 3, solid: false, decor: true, gather: true, gpu: true }
+            Settings::parse("rate=99\nчто-то\nscene=99\nsky=99\nsky_place=99\nwind=99\nwind_force=99\npile=99\nplow=99\nplow_kind=99\nsolid=0"),
+            Settings { rate: 2, scene: 5, sky: 3, sky_place: 2, wind: 3, wind_force: 3, pile: 3, plow: 3, plow_kind: 4, solid: false, decor: true, gather: true, gpu: true }
         );
         assert_eq!(Settings::parse(""), Settings::default());
     }
@@ -241,6 +272,10 @@ mod tests {
         assert_eq!(wind(2, 0).wind_dir(), WindDir::Left);
         assert_eq!(wind(3, 3).wind_force_value(), 3.5);
         assert_eq!(Settings::default().pile_scale(), 0.5);
+        assert_eq!(Settings::default().plow_every(), 60.0);
+        assert_eq!(Settings::default().plow_vehicle(), Vehicle::Tractor);
+        assert_eq!(Settings { plow_kind: 2, ..Settings::default() }.plow_vehicle(), Vehicle::Penguin);
+        assert_eq!(Settings { plow: 0, ..Settings::default() }.plow_every(), 0.0);
         assert_eq!(Settings { pile: 3, ..Settings::default() }.pile_scale(), 1.0);
     }
 }
