@@ -141,13 +141,13 @@ enum Role {
     Plain,
 }
 
-/// Роль украшения: каждое третье особое, каждое пятое зверь. Определяется зерном, как и
-/// положение, поэтому не мигает.
+/// Роль украшения: четверть особых, треть зверей, остальное обычные. Определяется зерном,
+/// как и положение, поэтому не мигает.
 fn role(it: &Item) -> Role {
     let r = hash01(it.seed ^ 0x4f1d);
-    if r < 0.3 {
+    if r < 0.25 {
         Role::Feature
-    } else if r < 0.5 {
+    } else if r < 0.6 {
         Role::Animal
     } else {
         Role::Plain
@@ -387,7 +387,7 @@ fn rover(it: &Item, out: &mut Vec<FlakeLook>) {
 }
 
 /// Во сколько раз звери крупнее, чем если бы их рисовали по высоте дерева: иначе они мелкие.
-const ANIMAL: f32 = 1.4;
+const ANIMAL: f32 = 2.6;
 
 /// Куда смотрит зверь: вправо или влево — по зерну.
 fn flip(seed: u32) -> f32 {
@@ -525,7 +525,7 @@ fn frog(it: &Item, t: f32, out: &mut Vec<FlakeLook>) {
 /// Дымящийся кратер: бугристый вал, тлеющее дно, дым, который ветер сносит вбок, и искры.
 fn crater(it: &Item, t: f32, out: &mut Vec<FlakeLook>) {
     let (x, b) = (it.x, it.base);
-    let u = it.height / 20.0;
+    let u = it.height * 1.6 / 20.0;
     let flick = 0.8 + 0.2 * (t * 5.0 + it.seed as f32).sin();
     // красный отсвет лежит позади всего
     out.push(glow([x, b - 3.0 * u], 7.0 * u, [1.0, 0.40, 0.12], 0.35 * flick));
@@ -711,14 +711,14 @@ mod tests {
     }
 
     #[test]
-    fn about_a_third_of_decorations_are_features_and_they_stand_on_the_edge() {
+    fn a_quarter_features_and_a_third_animals_and_they_stand_on_the_edge() {
         let items: Vec<Item> = (0..600u32)
             .map(|i| Item { x: 500.0, base: 300.0, height: 20.0, seed: i.wrapping_mul(2_654_435_761) })
             .collect();
         let n = items.iter().filter(|it| role(it) == Role::Feature).count();
-        assert!((120..=240).contains(&n), "особых украшений {n} из 600");
+        assert!((100..=200).contains(&n), "особых украшений {n} из 600");
         let animals = items.iter().filter(|it| role(it) == Role::Animal).count();
-        assert!((70..=170).contains(&animals), "зверей {animals} из 600");
+        assert!((160..=260).contains(&animals), "зверей {animals} из 600");
         for height in [12.0f32, 18.0, 25.0] {
             let it = Item { x: 500.0, base: 300.0, height, seed: 7 };
             for t in [0.0f32, 1.7, 4.9] {
@@ -810,7 +810,7 @@ mod tests {
                         assert!(f.center[0].is_finite() && f.center[1].is_finite(), "{name}");
                         assert!((0.0..=1.0).contains(&f.color[3]), "{name}: прозрачность {}", f.color[3]);
                         assert!(f.center[1] < 300.0, "{name}: фигура ниже кромки: {:?}", f.center);
-                        assert!((f.center[0] - 500.0).abs() <= height * 1.2, "{name}: вылезла вбок: {:?}", f.center);
+                        assert!((f.center[0] - 500.0).abs() <= height * 2.0, "{name}: вылезла вбок: {:?}", f.center);
                     }
                 }
             }
