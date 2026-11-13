@@ -77,8 +77,13 @@ impl Renderer {
     /// Есть ли в системе программный адаптер, на который можно переключиться.
     /// На macOS его нет: Metal работает только на GPU.
     pub fn software_available() -> bool {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
+        // В Windows программный адаптер (WARP) — это DX12: остальные бэкенды не опрашиваем,
+        // иначе в процесс грузятся драйверы OpenGL и Vulkan видеокарты (сотни мегабайт).
+        let backends = if cfg!(target_os = "windows") { wgpu::Backends::DX12 } else { wgpu::Backends::all() };
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = backends;
+        let instance = wgpu::Instance::new(desc);
+        pollster::block_on(instance.enumerate_adapters(backends))
             .iter()
             .any(|a| a.get_info().device_type == wgpu::DeviceType::Cpu)
     }
@@ -138,6 +143,8 @@ impl Renderer {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("goflake"),
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            // буферы у нас крошечные: не резервировать большие блоки видеопамяти «про запас»
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
             ..Default::default()
         }))
         .map_err(|e| format!("не удалось открыть устройство: {e}"))?;
