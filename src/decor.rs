@@ -77,6 +77,7 @@ pub fn looks(sim: &Sim, out: &mut Vec<FlakeLook>) {
     for it in plan(sim) {
         match kind {
             Decor::None => {}
+            Decor::Fir if is_house(&it) => house(&it, sim.time(), out),
             Decor::Fir => fir(&it, out),
             Decor::Leafy => leafy(&it, out),
             Decor::Cactus => cactus(&it, out),
@@ -116,6 +117,61 @@ fn fir(it: &Item, out: &mut Vec<FlakeLook>) {
     }
     // снег на макушке
     out.push(circle([x, b - h + thick * 0.3], thick * 0.7, [0.97, 0.98, 1.0]));
+}
+
+/// Каждое третье зимнее украшение — домик, остальные — ёлки.
+fn is_house(it: &Item) -> bool {
+    hash01(it.seed ^ 0x4f1d) < 0.3
+}
+
+/// Бревенчатый домик под снежной крышей: тёплые окна, кирпичная труба с дымком и
+/// гирлянда по карнизу. Чуть выше ёлки. Дым плывёт по времени `t`.
+fn house(it: &Item, t: f32, out: &mut Vec<FlakeLook>) {
+    let (x, b) = (it.x, it.base);
+    // всё чертится для домика высотой 19 условных единиц и умножается на `k`
+    let k = it.height * 1.2 / 19.0;
+    let (logs, door, brick) = ([[0.50, 0.31, 0.17], [0.43, 0.26, 0.14]], [0.20, 0.12, 0.08], [0.55, 0.27, 0.20]);
+    let (snow, roof) = ([0.97, 0.98, 1.0], [0.30, 0.20, 0.16]);
+    // стены: пять брёвен по две условных единицы толщиной
+    for j in 0..5 {
+        let y = b - k * (1.0 + 2.0 * j as f32);
+        out.push(bar([x - 14.0 * k, y], [x + 14.0 * k, y], k, logs[j % 2]));
+    }
+    // фронтон под крышей: три всё более короткие бревна
+    for (j, half) in [(5, 11.5), (6, 7.5), (7, 3.5)] {
+        let y = b - k * (1.0 + 2.0 * j as f32);
+        out.push(bar([x - half * k, y], [x + half * k, y], k, logs[j % 2]));
+    }
+    // дверь и два окна с тёплым светом
+    out.push(bar([x - 6.0 * k, b - 1.7 * k], [x - 6.0 * k, b - 5.3 * k], 1.6 * k, door));
+    out.push(circle([x - 4.6 * k, b - 3.6 * k], (0.35 * k).max(0.25), [1.0, 0.85, 0.35]));
+    for cx in [0.5, 9.0] {
+        out.push(bar([x + (cx - 0.9) * k, b - 5.6 * k], [x + (cx + 0.9) * k, b - 5.6 * k], 1.9 * k, [0.25, 0.15, 0.10]));
+        out.push(bar([x + (cx - 0.9) * k, b - 5.6 * k], [x + (cx + 0.9) * k, b - 5.6 * k], 1.5 * k, [1.0, 0.80, 0.40]));
+    }
+    // труба позади крыши
+    out.push(bar([x + 8.0 * k, b - 10.0 * k], [x + 8.0 * k, b - 18.0 * k], 1.5 * k, brick));
+    // крыша: два ската и снег на них
+    out.push(bar([x - 17.0 * k, b - 9.2 * k], [x, b - 16.6 * k], 1.5 * k, roof));
+    out.push(bar([x, b - 16.6 * k], [x + 17.0 * k, b - 9.2 * k], 1.5 * k, roof));
+    out.push(bar([x - 16.6 * k, b - 10.9 * k], [x + 0.1 * k, b - 18.0 * k], 1.4 * k, snow));
+    out.push(bar([x - 0.1 * k, b - 18.0 * k], [x + 16.6 * k, b - 10.9 * k], 1.4 * k, snow));
+    // снежная шапка на трубе
+    out.push(bar([x + 6.5 * k, b - 19.2 * k], [x + 9.5 * k, b - 19.2 * k], 0.7 * k, snow));
+    // гирлянда под карнизом
+    let bulbs = [[0.95, 0.25, 0.25], [0.35, 0.55, 1.0], [1.0, 0.85, 0.30], [0.40, 0.85, 0.40]];
+    for i in 0..9 {
+        let c = [x + (-12.8 + 3.2 * i as f32) * k, b - 9.4 * k + (i % 2) as f32 * 0.5 * k];
+        out.push(circle(c, (0.45 * k).max(0.3), bulbs[i % 4]));
+    }
+    // дымок: три облачка поднимаются, растут и тают
+    for i in 0..3 {
+        let ph = (t / 5.0 + i as f32 / 3.0).fract();
+        let c = [x + (8.0 + 2.5 * ph + 0.6 * (ph * 9.0).sin()) * k, b - (20.6 + 9.0 * ph) * k];
+        let mut puff = circle(c, (0.9 + 1.6 * ph) * k, [0.80, 0.82, 0.86]);
+        puff.color[3] = 0.45 * (1.0 - ph);
+        out.push(puff);
+    }
 }
 
 /// Дерево весной: тёмный ствол, пышная зелёная крона и розовые цветы.
@@ -267,6 +323,69 @@ mod tests {
                 assert!(f.center[0].is_finite() && f.center[1].is_finite() && f.color[3] <= 1.0);
                 assert!(f.center[1] < 300.0 + 4.0, "{kind:?}: фигура ниже кромки: {:?}", f.center);
             }
+        }
+    }
+
+    #[test]
+    fn about_a_third_of_winter_decorations_are_houses_and_they_stand_on_the_edge() {
+        let items: Vec<Item> = (0..600u32)
+            .map(|i| Item { x: 500.0, base: 300.0, height: 20.0, seed: i.wrapping_mul(2_654_435_761) })
+            .collect();
+        let n = items.iter().filter(|it| is_house(it)).count();
+        assert!((120..=240).contains(&n), "домиков {n} из 600");
+        for height in [12.0f32, 18.0, 25.0] {
+            let it = Item { x: 500.0, base: 300.0, height, seed: 7 };
+            for t in [0.0f32, 1.7, 4.9] {
+                let mut out = Vec::new();
+                house(&it, t, &mut out);
+                assert!(out.len() > 20 && out.len() <= 60, "{} фигур", out.len());
+                let half = height * 1.2 / 19.0 * 18.0;
+                for f in &out {
+                    assert!(f.center[0].is_finite() && f.center[1].is_finite() && f.color[3] <= 1.0 && f.color[3] >= 0.0);
+                    assert!(f.center[1] < 300.0, "фигура ниже кромки: {:?}", f.center);
+                    assert!((f.center[0] - 500.0).abs() <= half, "фигура вылезла вбок: {:?}", f.center);
+                }
+            }
+        }
+        // дом выше ёлки того же размера
+        let (mut h, mut f) = (Vec::new(), Vec::new());
+        let it = Item { x: 500.0, base: 300.0, height: 20.0, seed: 1 };
+        house(&it, 0.0, &mut h);
+        fir(&it, &mut f);
+        let top = |v: &Vec<FlakeLook>| v.iter().filter(|s| s.color[3] > 0.99).map(|s| s.center[1] - s.half[1]).fold(f32::MAX, f32::min);
+        assert!(top(&h) < top(&f) - 2.0, "домик не выше ёлки: {} и {}", top(&h), top(&f));
+    }
+
+    /// Сохраняет кадры украшений каждого вида осадков, чтобы посмотреть на них глазами.
+    /// `SNOWDRIFT_DUMP=/папка cargo test dump_decor -- --ignored`; формат — как у
+    /// `soft::tests::dump_preview` (`имя.raw` и `имя.txt`).
+    #[test]
+    #[ignore]
+    fn dump_decor() {
+        use crate::clock::Clock;
+        use crate::sky::{Sky, SkyMode};
+        let Some(dir) = std::env::var_os("SNOWDRIFT_DUMP") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        for kind in KINDS {
+            let mut s = Sim::new(1);
+            s.w = 1400.0;
+            s.h = 160.0;
+            s.rate = 0.0;
+            s.set_kind(kind);
+            // шесть окон подряд — шесть украшений с разными зёрнами
+            let wins: Vec<WindowInfo> =
+                (0..6).map(|i| WindowInfo { id: 10 + i, rect: Rect::new(i as f32 * 233.0, 90.0, 233.0, 90.0) }).collect();
+            s.refresh(&wins, None, 0.05);
+            for t in [0.0f32, 2.0] {
+                s.step(t.max(0.001), (-500.0, -500.0), (0.0, 0.0));
+            }
+            let mut canvas = crate::soft::Canvas::new();
+            let sky = Sky::new(SkyMode::Off, Clock { hour: 12.0, season: 5.5, unix: 0.0 });
+            canvas.draw(&s, &sky, 3.0);
+            let bytes: Vec<u8> = canvas.pixels.iter().flat_map(|p| p.to_le_bytes()).collect();
+            let name = format!("decor_{kind:?}").to_lowercase();
+            std::fs::write(dir.join(format!("{name}.raw")), bytes).unwrap();
+            std::fs::write(dir.join(format!("{name}.txt")), format!("{} {}", canvas.width, canvas.height)).unwrap();
         }
     }
 
