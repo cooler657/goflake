@@ -6,7 +6,7 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, FindWindowW, GWL_EXSTYLE, GetClassNameW, GetCursorPos, GetWindowLongW, GetWindowRect,
+    EnumWindows, FindWindowExW, GWL_EXSTYLE, GetClassNameW, GetCursorPos, GetWindowLongW, GetWindowRect,
     GetWindowThreadProcessId, IsIconic, IsWindowVisible, WS_EX_TOOLWINDOW,
 };
 use windows_sys::core::BOOL;
@@ -99,18 +99,30 @@ impl Platform {
         (unsafe { GetCursorPos(&mut p) } != 0).then_some((p.x as f32, p.y as f32))
     }
 
-    /// Рамка панели задач. Разрешений не требует.
-    pub fn dock(&mut self) -> Option<[f32; 4]> {
-        let class = wide("Shell_TrayWnd");
-        let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-        // SAFETY: строка класса завершается нулём и живёт на время вызова.
-        unsafe {
-            let hwnd = FindWindowW(class.as_ptr(), std::ptr::null());
-            if hwnd.is_null() || IsWindowVisible(hwnd) == 0 || GetWindowRect(hwnd, &mut r) == 0 {
-                return None;
+    /// Рамки панелей задач: основной и по одной на каждом дополнительном мониторе.
+    /// Разрешений не требует.
+    pub fn docks(&mut self) -> Vec<[f32; 4]> {
+        let mut out = Vec::new();
+        for name in ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"] {
+            let class = wide(name);
+            let mut prev: HWND = std::ptr::null_mut();
+            // SAFETY: строка класса завершается нулём и живёт на время вызова;
+            // `prev` — окно, полученное от системы на предыдущем шаге.
+            unsafe {
+                loop {
+                    let hwnd = FindWindowExW(std::ptr::null_mut(), prev, class.as_ptr(), std::ptr::null());
+                    if hwnd.is_null() {
+                        break;
+                    }
+                    prev = hwnd;
+                    let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                    if IsWindowVisible(hwnd) != 0 && GetWindowRect(hwnd, &mut r) != 0 {
+                        out.push([r.left as f32, r.top as f32, (r.right - r.left) as f32, (r.bottom - r.top) as f32]);
+                    }
+                }
             }
         }
-        Some([r.left as f32, r.top as f32, (r.right - r.left) as f32, (r.bottom - r.top) as f32])
+        out
     }
 
     /// Включена ли экономия заряда батареи.

@@ -134,9 +134,13 @@ impl App {
     fn build_screens(&mut self, el: &ActiveEventLoop) -> Result<(), String> {
         let monitors = screen::monitors(el);
         let mut screens = Vec::with_capacity(monitors.len());
+        // небо одно: на мониторе с началом координат рабочего стола (иначе — на первом)
+        let sky_screen = monitors.iter().position(|m| m.pos == (0, 0)).unwrap_or(0);
         for (i, m) in monitors.iter().enumerate() {
             let sim = new_sim(&self.settings, self.seed.wrapping_add(i as u64 * 7919), self.low_power);
-            let screen = Screen::create(el, *m, self.settings.gpu, sim, new_sky(&self.settings))?;
+            let mut screen = Screen::create(el, *m, self.settings.gpu, sim, new_sky(&self.settings))?;
+            screen.has_sky = i == sky_screen;
+            screen.sky.set_mode(screen.sky_mode(self.settings.sky_mode()));
             eprintln!("сугроб: экран {} — отрисовка: {}", i + 1, screen.gfx.info());
             screens.push(screen);
         }
@@ -241,13 +245,13 @@ impl App {
                 }
             }
         }
-        let dock = self.platform.dock();
+        let docks = self.platform.docks();
         for s in &mut self.screens {
             s.sky.set_clock(clk);
             // в режиме «по времени года» материал меняется вместе с календарём
             s.sim.set_kind(kind);
-            // Dock лежит на одном мониторе: на том, где его середина; снизу экрана
-            s.dock = dock.and_then(|raw| {
+            // каждая панель лежит на одном мониторе: на том, где её середина; снизу экрана
+            s.dock = docks.iter().find_map(|&raw| {
                 let b = s.monitor.os_bounds();
                 let (cx, cy) = (raw[0] + raw[2] / 2.0, raw[1] + raw[3] / 2.0);
                 if cx < b[0] || cx > b[0] + b[2] || cy < b[1] || cy > b[1] + b[3] {
@@ -301,7 +305,14 @@ impl App {
         }
         match frame_interval(self.low_power) {
             Some(gap) => s.next_frame = Some(now + gap),
-            None => s.window.request_redraw(),
+            None => {
+                // Эстафета: следующий кадр просит не этот экран, а следующий по кругу (не на
+                // паузе). Если каждое окно просит перерисовку само себя, Windows отдаёт
+                // WM_PAINT одному и тому же окну, и остальные мониторы не получают кадров.
+                let n = self.screens.len();
+                let next = (1..=n).map(|d| (i + d) % n).find(|&k| !self.screens[k].paused).unwrap_or(i);
+                self.screens[next].window.request_redraw();
+            }
         }
     }
 
@@ -327,7 +338,7 @@ impl App {
             Cmd::Sky(i) => {
                 self.settings.sky = i.min(settings::SKIES - 1);
                 let mode = self.settings.sky_mode();
-                self.screens.iter_mut().for_each(|s| s.sky.set_mode(mode));
+                self.screens.iter_mut().for_each(|s| s.sky.set_mode(s.sky_mode(mode)));
                 self.settings.save();
             }
             Cmd::SkyPlace(i) => {

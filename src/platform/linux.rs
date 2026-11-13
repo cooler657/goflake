@@ -148,8 +148,8 @@ impl Platform {
     }
 
     /// Рамка нижней панели рабочего стола. Разрешений не требует.
-    pub fn dock(&mut self) -> Option<[f32; 4]> {
-        self.panel
+    pub fn docks(&mut self) -> Vec<[f32; 4]> {
+        self.panel.into_iter().collect()
     }
 
     /// Профиль питания «экономия» (power-saver), если ядро его сообщает.

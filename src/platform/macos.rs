@@ -244,8 +244,13 @@ impl Platform {
         }
     }
 
+    /// Рамки Dock (он один) — только если доступ выдан.
+    pub fn docks(&mut self) -> Vec<[f32; 4]> {
+        self.dock().into_iter().collect()
+    }
+
     /// Рамка Dock через Accessibility — только если доступ выдан.
-    pub fn dock(&mut self) -> Option<[f32; 4]> {
+    fn dock(&mut self) -> Option<[f32; 4]> {
         let pid = self.dock_pid?;
         // SAFETY: все полученные объекты освобождаются; типы значений проверяются.
         unsafe {

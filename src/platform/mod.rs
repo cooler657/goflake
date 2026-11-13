@@ -5,7 +5,8 @@
 //! - `new() -> Result<Platform, String>`
 //! - `windows(&mut self) -> Vec<RawWindow>` — обычные окна от переднего к заднему, без нашего;
 //! - `cursor(&mut self) -> Option<(f32, f32)>` — глобальное положение курсора;
-//! - `dock(&mut self) -> Option<[f32; 4]>` — рамка Dock или панели задач;
+//! - `docks(&mut self) -> Vec<[f32; 4]>` — рамки Dock или панелей задач (в Windows
+//!   у каждого монитора может быть своя);
 //! - `dock_access(&self) -> Option<bool>` — нужно ли и выдано ли разрешение для Dock
 //!   (`None` — разрешение не требуется);
 //! - `request_dock_access(&self)` — запросить это разрешение;

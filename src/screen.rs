@@ -14,7 +14,7 @@ use winit::window::{Window, WindowLevel};
 use crate::gfx::Gfx;
 use crate::platform;
 use crate::sim::{Rect, Sim};
-use crate::sky::Sky;
+use crate::sky::{Sky, SkyMode};
 
 /// Монитор: положение и размер в физических пикселях рабочего стола и масштаб.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -95,6 +95,8 @@ pub struct Screen {
     pub seen_gen: u64,
     pub last_refresh: Instant,
     pub dock: Option<Rect>,
+    /// Небо одно на весь рабочий стол: солнце и луна рисуются только на основном мониторе.
+    pub has_sky: bool,
 }
 
 impl Screen {
@@ -159,6 +161,7 @@ impl Screen {
             seen_gen: u64::MAX,
             last_refresh: Instant::now(),
             dock: None,
+            has_sky: true,
         };
         screen.apply_size();
         Ok(screen)
@@ -171,6 +174,11 @@ impl Screen {
         self.gfx.resize(size.width, size.height);
         self.sim.w = size.width as f32 / self.scale;
         self.sim.h = size.height as f32 / self.scale;
+    }
+
+    /// Режим неба для этого экрана: на неосновных мониторах неба нет.
+    pub fn sky_mode(&self, mode: SkyMode) -> SkyMode {
+        if self.has_sky { mode } else { SkyMode::Off }
     }
 
     pub fn point(&self, x: f32, y: f32) -> (f32, f32) {
