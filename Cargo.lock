@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "goflake"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "bytemuck",
  "dirs",
