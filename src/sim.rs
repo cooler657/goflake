@@ -647,7 +647,10 @@ impl Sim {
             }
             if !dead && solid {
                 for r in solids.iter() {
-                    if !(p.x > r.min_x() && p.x < r.max_x() && p.y > r.min_y() && p.y < r.max_y()) {
+                    // У окна, прижатого к верху экрана, снег гибнет ещё до того, как край снежинки
+                    // показался на экране: иначе в первой строке пикселей он мелькал (моргал)
+                    let top = if r.min_y() <= 5.0 { r.min_y() - p.r - 1.0 } else { r.min_y() };
+                    if !(p.x > r.min_x() && p.x < r.max_x() && p.y > top && p.y < r.max_y()) {
                         continue;
                     }
                     // Отскок только от края, мимо которого частица может пролететь по экрану.
@@ -895,6 +898,22 @@ mod tests {
                 }
             }
             assert!(worst <= 8, "{dir:?}: у края экрана скопилось {worst} частиц");
+        }
+    }
+
+    #[test]
+    fn solid_window_touching_the_top_never_shows_a_flake_over_it() {
+        let mut s = sim();
+        s.solid = true;
+        s.wind_dir = WindDir::Calm;
+        let win = [WindowInfo { id: 7, rect: Rect::new(0.0, 0.0, s.w, s.h - 40.0) }];
+        for _ in 0..(60 * 10) {
+            s.refresh(&win, None, 0.05);
+            s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+            assert!(
+                !s.particles.iter().any(|p| p.x > 0.0 && p.x < s.w && p.y + p.r > 0.0 && p.y < s.h - 40.0),
+                "снежинка мелькнула у верхнего края окна"
+            );
         }
     }
 
