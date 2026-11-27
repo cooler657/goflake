@@ -75,6 +75,35 @@ pub fn to_local(physical: bool, origin: (f32, f32), scale: f32, x: f32, y: f32) 
     }
 }
 
+/// Обратное к `to_local`: точка симуляции экрана в глобальных координатах ОС.
+pub fn to_global(physical: bool, origin: (f32, f32), scale: f32, x: f32, y: f32) -> (f32, f32) {
+    if physical {
+        (x * scale + origin.0, y * scale + origin.1)
+    } else {
+        (x + origin.0 / scale, y + origin.1 / scale)
+    }
+}
+
+/// Насколько выше экрана частица всё ещё считается принадлежащей соседнему экрану.
+const SKY_MARGIN: f32 = -20.0;
+
+/// Куда попадает точка `(x, y)` экрана `from` на экране `to` (начало, масштаб, ширина и
+/// высота мира), если она лежит внутри него. Так частица переходит на соседний монитор.
+pub fn crossing(
+    physical: bool,
+    from: ((f32, f32), f32),
+    to: ((f32, f32), f32, f32, f32),
+    x: f32,
+    y: f32,
+) -> Option<(f32, f32)> {
+    let (gx, gy) = to_global(physical, from.0, from.1, x, y);
+    let (tx, ty) = to_local(physical, to.0, to.1, gx, gy);
+    // Выше экрана небольшой запас: там рождаются частицы, и у шва мониторов они не должны
+    // пропадать. По бокам и снизу чуть внутрь, чтобы на следующем шаге частица не показалась
+    // снова вышедшей.
+    (tx >= 0.0 && tx < to.2 && ty >= SKY_MARGIN && ty < to.3).then(|| (tx.clamp(0.01, to.2 - 0.01), ty.min(to.3 - 0.01)))
+}
+
 pub struct Screen {
     pub window: Arc<Window>,
     pub gfx: Gfx,
@@ -90,6 +119,8 @@ pub struct Screen {
     /// Когда рисовать следующий кадр (при экономии энергии кадры идут реже).
     pub next_frame: Option<Instant>,
     pub last_mouse: Option<(f32, f32)>,
+    /// Окно сейчас принимает мышь: курсор над уборщиком или его тащат.
+    pub clickable: bool,
     pub mouse_vel: (f32, f32),
     /// Номер списка окон, который симуляция уже видела.
     pub seen_gen: u64,
@@ -138,10 +169,8 @@ impl Screen {
             .create_window(platform::window_attributes(attrs))
             .map_err(|e| format!("не удалось создать окно: {e}"))?;
         let window = Arc::new(window);
-        // клики и перетаскивания проходят сквозь снег
-        if let Err(e) = window.set_cursor_hittest(false) {
-            eprintln!("сугроб: окно не удалось сделать прозрачным для мыши: {e}");
-        }
+        // клики и перетаскивания проходят сквозь снег (кроме уборщика, см. `clickable`)
+        platform::set_clickable(&window, false);
         platform::configure_window(&window);
 
         let gfx = Gfx::new(window.clone(), el.owned_display_handle(), gpu)?;
@@ -157,6 +186,7 @@ impl Screen {
             last_frame: None,
             next_frame: None,
             last_mouse: None,
+            clickable: false,
             mouse_vel: (0.0, 0.0),
             seen_gen: u64::MAX,
             last_refresh: Instant::now(),
@@ -179,6 +209,11 @@ impl Screen {
     /// Режим неба для этого экрана: на неосновных мониторах неба нет.
     pub fn sky_mode(&self, mode: SkyMode) -> SkyMode {
         if self.has_sky { mode } else { SkyMode::Off }
+    }
+
+    /// Сведения об экране для `crossing`: начало, масштаб, размер мира.
+    pub fn world(&self) -> ((f32, f32), f32, f32, f32) {
+        (self.origin, self.scale, self.sim.w, self.sim.h)
     }
 
     pub fn point(&self, x: f32, y: f32) -> (f32, f32) {
@@ -232,6 +267,40 @@ mod tests {
             assert_eq!(b, [200.0, 100.0, 3000.0, 2000.0]);
         } else {
             assert_eq!(b, [100.0, 50.0, 1500.0, 1000.0]);
+        }
+    }
+
+    #[test]
+    fn a_particle_leaving_one_monitor_enters_its_neighbour() {
+        // два монитора 1920×1080 рядом (Windows, физические пиксели, масштаб 1)
+        let a = ((0.0, 0.0), 1.0);
+        let b = ((1920.0, 0.0), 1.0, 1920.0, 1079.0);
+        let p = crossing(true, a, b, 1920.3, 400.0).unwrap();
+        assert!((p.0 - 0.3).abs() < 0.01 && p.1 == 400.0, "{p:?}");
+        // выше мониторов и мимо них — никуда
+        assert_eq!(crossing(true, a, b, 1920.3, -30.0), None);
+        // чуть выше экрана (там рождаются частицы) — переходит вместе с высотой
+        assert_eq!(crossing(true, a, b, 1920.5, -3.0).map(|p| p.1), Some(-3.0));
+        // с левого края второго монитора — обратно на первый
+        let (a2, b2) = (((1920.0, 0.0), 1.0), ((0.0, 0.0), 1.0, 1920.0, 1079.0));
+        let p = crossing(true, a2, b2, -0.5, 100.0).unwrap();
+        assert!(p.0 > 1919.0 && p.0 < 1920.0 && p.1 == 100.0, "{p:?}");
+        // разный масштаб: справа монитор с масштабом 2 (точек вдвое меньше пикселей)
+        let c = ((1920.0, 0.0), 2.0, 960.0, 540.0);
+        let p = crossing(true, a, c, 1930.0, 200.0).unwrap();
+        assert_eq!(p, (5.0, 100.0));
+        // macOS: координаты в точках
+        let m2 = ((1470.0 * 2.0, 0.0), 2.0, 1470.0, 956.0);
+        let p = crossing(false, ((0.0, 0.0), 2.0), m2, 1471.0, 50.0).unwrap();
+        assert_eq!(p, (1.0, 50.0));
+    }
+
+    #[test]
+    fn to_global_undoes_to_local() {
+        for physical in [true, false] {
+            let (x, y) = to_global(physical, (-1920.0, 120.0), 1.5, 33.0, 77.0);
+            let (lx, ly) = to_local(physical, (-1920.0, 120.0), 1.5, x, y);
+            assert!((lx - 33.0).abs() < 1e-3 && (ly - 77.0).abs() < 1e-3);
         }
     }
 

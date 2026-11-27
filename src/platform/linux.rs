@@ -179,3 +179,6 @@ pub fn window_attributes(attrs: WindowAttributes) -> WindowAttributes {
 }
 
 pub fn configure_window(_window: &Window) {}
+
+/// В X11 клик по окну без рамки фокус не отбирает.
+pub fn keep_inactive(_window: &Window) {}

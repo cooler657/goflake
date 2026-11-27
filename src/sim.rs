@@ -173,7 +173,13 @@ pub struct Sim {
     pub heaps: Vec<heap::Heap>,
     /// Уборщик на кромке панели задач или Dock.
     pub plow: plow::Plow,
+    /// Рядом есть другие экраны: вышедшие за край частицы складываются в `outbox`,
+    /// чтобы `main.rs` передал их соседу (рабочий стол — одно общее пространство).
+    pub handoff: bool,
+    pub outbox: Vec<Particle>,
     solids: Vec<Rect>,
+    /// Номера поверхностей окон из `solids` (в том же порядке, от переднего к заднему); у окна без поверхности — `None`.
+    solid_ids: Vec<Option<i64>>,
     t: f32,
     spawn_acc: f32,
     rng: Rng,
@@ -254,7 +260,10 @@ impl Sim {
             pile_scale: 1.0,
             heaps: Vec::new(),
             plow: plow::Plow::default(),
+            handoff: false,
+            outbox: Vec::new(),
             solids: Vec::new(),
+            solid_ids: Vec::new(),
             t: 0.0,
             spawn_acc: 0.0,
             rng: Rng::new(seed),
@@ -296,6 +305,13 @@ impl Sim {
             }
         }
         self.pile_scale = scale;
+    }
+
+    /// Принимает частицу, прилетевшую с соседнего экрана (или вернувшуюся, если принять её некому).
+    pub fn accept(&mut self, p: Particle) {
+        if self.particles.len() < MAX_PARTICLES {
+            self.particles.push(p);
+        }
     }
 
     /// Сбрасывает все кучи — материал падает вниз.
@@ -415,6 +431,8 @@ impl Sim {
         }
         self.solids.clear();
         self.solids.extend(occ.iter().map(|(r, _)| *r));
+        self.solid_ids.clear();
+        self.solid_ids.extend(occ.iter().map(|(_, id)| *id));
 
         let mut ground_occ = Vec::new();
         if let Some(d) = dock {
@@ -445,7 +463,7 @@ impl Sim {
             self.drop_all_heaps(true);
         }
         self.plow_step(dt);
-        let Sim { w, h, particles, surfaces, kind, rate, rate_scale, solid, wind_dir, wind_force, decor: _, gather: _, pile_scale, heaps: _, plow: _, solids, t, spawn_acc, rng } = self;
+        let Sim { w, h, particles, surfaces, kind, rate, rate_scale, solid, wind_dir, wind_force, decor: _, gather: _, pile_scale, heaps: _, plow: _, handoff, outbox, solids, solid_ids: _, t, spawn_acc, rng } = self;
         let (w, h, solid, kind, wind_dir, force) = (*w, *h, *solid, *kind, *wind_dir, *wind_force);
         // материал, который падает сейчас и из которого состоят кучи
         let mat = kind.material();
@@ -586,6 +604,16 @@ impl Sim {
             p.angle += (p.spin + m.spin * 0.7 * (t * m.sway_freq + p.phase).cos()) * dt;
             p.life -= dt;
 
+            // вышла за край экрана, а рядом есть другой экран — отдаём её соседу
+            if *handoff
+                && ((prev_x >= 0.0 && p.x < 0.0)
+                    || (prev_x <= w && p.x > w)
+                    || (prev_y >= 0.0 && p.y < 0.0)
+                    || (prev_y <= h && p.y > h))
+            {
+                outbox.push(particles.swap_remove(i));
+                continue;
+            }
             let mut dead = p.life <= 0.0 || p.y > h + 12.0 || p.x < -80.0 || p.x > w + 80.0;
             if !dead && (p.land || (solid && p.life.is_infinite())) && p.vy > 0.0 && p.kind == kind {
                 for s in surfaces.values_mut() {
@@ -810,6 +838,41 @@ mod tests {
                     .any(|p| p.x > r.min_x() && p.x < r.max_x() && p.y > r.min_y() + 1.0 && p.y < r.max_y()),
                 "частица оказалась поверх содержимого окна"
             );
+        }
+    }
+
+    #[test]
+    fn particles_crossing_the_edge_go_to_the_outbox_only_with_neighbours() {
+        let flake = |x: f32, y: f32, vx: f32, vy: f32| Particle {
+            x,
+            y,
+            vx,
+            vy,
+            r: 1.0,
+            mass: 1.0,
+            land: false,
+            debris: false,
+            layer: 0,
+            phase: 0.0,
+            kind: Kind::Snow,
+            tint: 0,
+            angle: 0.0,
+            spin: 0.0,
+            life: f32::INFINITY,
+        };
+        for handoff in [false, true] {
+            let mut s = sim();
+            s.rate = 0.0;
+            s.wind_dir = WindDir::Calm;
+            s.handoff = handoff;
+            // вылетает вправо, вылетает вниз, остаётся внутри, а эта только родилась за краем
+            s.particles.extend([flake(999.9, 100.0, 500.0, 0.0), flake(500.0, 799.9, 0.0, 400.0), flake(500.0, 100.0, 0.0, 0.0), flake(-30.0, 100.0, 5.0, 0.0)]);
+            s.step(0.05, (-500.0, -500.0), (0.0, 0.0));
+            assert_eq!(s.outbox.len(), if handoff { 2 } else { 0 }, "handoff = {handoff}");
+            assert!(s.outbox.iter().all(|p| p.x > s.w || p.y > s.h));
+            if handoff {
+                assert_eq!(s.particles.len() + s.outbox.len(), 4, "ничто не пропало по дороге");
+            }
         }
     }
 

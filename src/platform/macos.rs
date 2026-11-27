@@ -348,6 +348,9 @@ pub fn window_attributes(attrs: WindowAttributes) -> WindowAttributes {
     attrs.with_has_shadow(false)
 }
 
+/// Окно без рамки не становится главным от клика, ничего делать не нужно.
+pub fn keep_inactive(_window: &Window) {}
+
 /// Поднимает окно на уровень строки меню и показывает его на всех рабочих столах.
 pub fn configure_window(window: &Window) {
     let Ok(handle) = window.window_handle() else { return };

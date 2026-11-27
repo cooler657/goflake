@@ -24,7 +24,7 @@ mod tray;
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::WindowId;
 
@@ -64,6 +64,7 @@ fn new_sim(settings: &Settings, seed: u64, low_power: bool) -> Sim {
     sim.decor = settings.decor;
     sim.gather = settings.gather;
     sim.pile_scale = settings.pile_scale();
+    sim.plow.enabled = true;
     sim.plow.every = settings.plow_every();
     sim.plow.vehicle = settings.plow_vehicle();
     sim.wind_dir = settings.wind_dir();
@@ -76,6 +77,21 @@ fn new_sky(settings: &Settings) -> Sky {
     let mut sky = Sky::new(settings.sky_mode(), clock::now());
     sky.set_place(settings.sky_place_value());
     sky
+}
+
+/// Сколько секунд можно тащить уборщика: если кнопку отпустили, а событие потерялось,
+/// окно не должно навсегда остаться перехватывающим мышь.
+const DRAG_LIMIT: Duration = Duration::from_secs(20);
+/// Сдвиг курсора (точек), после которого нажатие на уборщика считается перетаскиванием, а не щелчком.
+const DRAG_DISTANCE: f32 = 8.0;
+
+/// Уборщика взяли мышью.
+struct Drag {
+    /// Экран, на котором его взяли (там и придёт отпускание кнопки).
+    screen: usize,
+    /// Где был курсор в момент нажатия, в координатах этого экрана.
+    press: (f32, f32),
+    since: Instant,
 }
 
 struct App {
@@ -100,6 +116,7 @@ struct App {
     last_poll: Instant,
     last_slow: Instant,
     seed: u64,
+    drag: Option<Drag>,
 }
 
 impl App {
@@ -138,6 +155,7 @@ impl App {
 
     /// Создаёт по экрану на каждый монитор.
     fn build_screens(&mut self, el: &ActiveEventLoop) -> Result<(), String> {
+        self.drag = None;
         let monitors = screen::monitors(el);
         let mut screens = Vec::with_capacity(monitors.len());
         // небо одно: на мониторе с началом координат рабочего стола (иначе — на первом)
@@ -146,6 +164,8 @@ impl App {
             let sim = new_sim(&self.settings, self.seed.wrapping_add(i as u64 * 7919), self.low_power);
             let mut screen = Screen::create(el, *m, self.settings.gpu, sim, new_sky(&self.settings))?;
             screen.has_sky = i == sky_screen;
+            // экранов несколько — вышедший за край снег переходит на соседний
+            screen.sim.handoff = monitors.len() > 1;
             screen.sky.set_mode(screen.sky_mode(self.settings.sky_mode()));
             eprintln!("сугроб: экран {} — отрисовка: {}", i + 1, screen.gfx.info());
             screens.push(screen);
@@ -209,6 +229,16 @@ impl App {
             if fullscreen && !s.paused {
                 eprintln!("сугроб: над экраном {} полноэкранное приложение — пауза", i + 1);
                 s.paused = true;
+                // уборщика, которого тащили, отпускаем: окно больше не должно перехватывать мышь
+                if self.drag.as_ref().is_some_and(|d| d.screen == i) {
+                    self.drag = None;
+                }
+                s.sim.plow.held = false;
+                s.sim.plow.carry = None;
+                if s.clickable {
+                    s.clickable = false;
+                    platform::set_clickable(&s.window, false);
+                }
                 s.next_frame = None;
                 s.gfx.clear();
             } else if !fullscreen && s.paused {
@@ -294,6 +324,20 @@ impl App {
         }
         s.last_mouse = cursor;
 
+        // уборщик: взятый мышью рисуется там, где курсор; окно принимает мышь только над ним
+        if self.drag.as_ref().is_some_and(|d| d.since.elapsed() > DRAG_LIMIT) {
+            self.drag = None;
+        }
+        let carried = self.drag.as_ref().map(|d| d.screen);
+        let inside = c.0 >= 0.0 && c.0 < s.sim.w && c.1 >= 0.0 && c.1 < s.sim.h;
+        s.sim.plow.held = carried == Some(i);
+        s.sim.plow.carry = (carried.is_some() && inside).then_some(c);
+        let clickable = carried == Some(i) || s.sim.plow_grab(c);
+        if clickable != s.clickable {
+            s.clickable = clickable;
+            platform::set_clickable(&s.window, clickable);
+        }
+
         // окна: один список на все экраны, каждый переводит его в свои координаты
         if s.seen_gen != self.win_gen {
             let list: Vec<WindowInfo> =
@@ -305,6 +349,8 @@ impl App {
         }
 
         s.sim.step(dt, c, s.mouse_vel);
+        self.hand_over(i);
+        let s = &mut self.screens[i];
         if !s.gfx.render(&s.sim, &s.sky, s.scale) {
             // кадр недоступен (окно скрыто системой) — не крутим цикл вхолостую
             std::thread::sleep(Duration::from_millis(16));
@@ -322,10 +368,63 @@ impl App {
         }
     }
 
+    /// Частицы, вышедшие за край экрана `i`, переходят на соседний экран, если он там есть;
+    /// иначе возвращаются (и сами улетают за пределы мира). Мониторы — одно пространство.
+    fn hand_over(&mut self, i: usize) {
+        if self.screens[i].sim.outbox.is_empty() {
+            return;
+        }
+        let out = std::mem::take(&mut self.screens[i].sim.outbox);
+        let (origin, scale, ..) = self.screens[i].world();
+        for mut p in out {
+            let dest = (0..self.screens.len()).filter(|&k| k != i && !self.screens[k].paused).find_map(|k| {
+                screen::crossing(platform::PHYSICAL, (origin, scale), self.screens[k].world(), p.x, p.y).map(|(x, y)| (k, x, y))
+            });
+            match dest {
+                Some((k, x, y)) => {
+                    (p.x, p.y) = (x, y);
+                    self.screens[k].sim.accept(p);
+                }
+                None => self.screens[i].sim.accept(p),
+            }
+        }
+    }
+
+    /// Левая кнопка над нашим окном (оно принимает мышь только над уборщиком): нажатие берёт
+    /// его, отпускание на месте — щелчок (выезжает), отпускание в другом месте — бросок на окно.
+    fn mouse_button(&mut self, i: usize, pressed: bool) {
+        let Some((x, y)) = self.platform.cursor() else { return };
+        let c = self.screens[i].point(x, y);
+        if pressed {
+            if self.drag.is_none() && self.screens[i].sim.plow_grab(c) {
+                self.drag = Some(Drag { screen: i, press: c, since: Instant::now() });
+                self.screens[i].sim.plow.held = true;
+            }
+            return;
+        }
+        let Some(d) = self.drag.take() else { return };
+        let src = &mut self.screens[d.screen];
+        src.sim.plow.held = false;
+        src.sim.plow.carry = None;
+        if (c.0 - d.press.0).hypot(c.1 - d.press.1) < DRAG_DISTANCE {
+            src.sim.plow_start();
+            return;
+        }
+        // брошен: на каком экране и на каком окне — решает точка, где отпустили (может быть другой монитор)
+        let (origin, scale, ..) = src.world();
+        let target = (0..self.screens.len()).find_map(|k| {
+            screen::crossing(platform::PHYSICAL, (origin, scale), self.screens[k].world(), c.0, c.1).map(|(x, y)| (k, x, y))
+        });
+        if let Some((k, x, y)) = target {
+            self.screens[k].sim.plow_drop(x, y);
+        }
+    }
+
     fn command(&mut self, el: &ActiveEventLoop, cmd: Cmd) {
         match cmd {
             Cmd::Toggle => {
                 self.running = !self.running;
+                self.drag = None;
                 for s in &mut self.screens {
                     s.window.set_visible(self.running);
                     if self.running {
@@ -455,6 +554,9 @@ impl ApplicationHandler<Cmd> for App {
         let Some(i) = self.screens.iter().position(|s| s.window.id() == id) else { return };
         match event {
             WindowEvent::RedrawRequested => self.frame(i),
+            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
+                self.mouse_button(i, state == ElementState::Pressed)
+            }
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => self.screens[i].apply_size(),
             WindowEvent::CloseRequested => el.exit(),
             _ => {}
@@ -553,6 +655,7 @@ fn main() {
         last_poll: Instant::now(),
         last_slow: Instant::now(),
         seed,
+        drag: None,
     };
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("сугроб: {e}");

@@ -175,4 +175,22 @@ pub fn window_attributes(attrs: WindowAttributes) -> WindowAttributes {
     attrs.with_skip_taskbar(true).with_no_redirection_bitmap(true)
 }
 
-pub fn configure_window(_window: &Window) {}
+pub fn configure_window(window: &Window) {
+    keep_inactive(window);
+}
+
+/// Клик по окну не должен делать его активным: иначе уборщик отбирал бы фокус у программы,
+/// в которой работает пользователь. Стиль нужно ставить после каждого `set_cursor_hittest`:
+/// winit при смене флагов пересчитывает расширенные стили заново.
+pub fn keep_inactive(window: &Window) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowLongW, WS_EX_NOACTIVATE};
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Ok(handle) = window.window_handle() else { return };
+    let RawWindowHandle::Win32(h) = handle.as_raw() else { return };
+    let hwnd = h.hwnd.get() as HWND;
+    // SAFETY: `hwnd` — живое окно этого процесса, вызов идёт из потока окна.
+    unsafe {
+        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE as i32);
+    }
+}
