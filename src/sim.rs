@@ -622,11 +622,14 @@ impl Sim {
                     if !(p.x > r.min_x() && p.x < r.max_x() && p.y > r.min_y() && p.y < r.max_y()) {
                         continue;
                     }
-                    if prev_y > r.min_y() && prev_x <= r.min_x() {
+                    // Отскок только от края, мимо которого частица может пролететь по экрану.
+                    // Окно во весь экран упирается в край экрана: снег там не отскакивал, а висел
+                    // столбиком на x≈0 и моргал, поэтому такая частица просто гибнет.
+                    if prev_y > r.min_y() && prev_x <= r.min_x() && r.min_x() > 0.0 {
                         // удар о левый край окна
                         p.x = r.min_x() - 0.5;
                         p.vx = -p.vx.abs() * 0.3;
-                    } else if prev_y > r.min_y() && prev_x >= r.max_x() {
+                    } else if prev_y > r.min_y() && prev_x >= r.max_x() && r.max_x() < w {
                         // удар о правый край
                         p.x = r.max_x() + 0.5;
                         p.vx = p.vx.abs() * 0.3;
@@ -807,6 +810,28 @@ mod tests {
                     .any(|p| p.x > r.min_x() && p.x < r.max_x() && p.y > r.min_y() + 1.0 && p.y < r.max_y()),
                 "частица оказалась поверх содержимого окна"
             );
+        }
+    }
+
+    #[test]
+    fn solid_window_across_the_whole_screen_leaves_no_column_of_snow_at_its_edge() {
+        // окно, развёрнутое на весь экран, упирается в края экрана: снег не должен
+        // отскакивать от них и висеть столбиком (моргал на реальном экране)
+        for dir in [WindDir::Right, WindDir::Left] {
+            let mut s = sim();
+            s.solid = true;
+            s.wind_dir = dir;
+            s.wind_force = 1.0;
+            let win = [WindowInfo { id: 7, rect: Rect::new(0.0, 0.0, s.w, s.h - 40.0) }];
+            let mut worst = 0;
+            for i in 0..(60 * 20) {
+                s.refresh(&win, None, 0.05);
+                s.step(1.0 / 60.0, (-500.0, -500.0), (0.0, 0.0));
+                if i > 60 * 5 {
+                    worst = worst.max(s.particles.iter().filter(|p| p.x.abs() < 4.0 || (p.x - s.w).abs() < 4.0).count());
+                }
+            }
+            assert!(worst <= 8, "{dir:?}: у края экрана скопилось {worst} частиц");
         }
     }
 
